@@ -6,7 +6,10 @@ __pycache__/
 dist/
 build/
 *.egg-info/
-.github/
+.github/*
+!.github/workflows/
+.github/workflows/*
+!.github/workflows/workflow.yml
 .planning/
 agent_colab/
 debug/
