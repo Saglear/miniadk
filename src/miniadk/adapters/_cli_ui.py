@@ -18,10 +18,13 @@ OutputMode = Literal["auto", "plain", "pretty"]
 class CLITheme:
     name: str = "miniadk"
     accent: str = "\033[38;5;81m"
+    accent2: str = "\033[38;5;111m"
     muted: str = "\033[38;5;244m"
+    faint: str = "\033[38;5;238m"
     user: str = "\033[38;5;111m"
     assistant: str = "\033[38;5;120m"
     tool: str = "\033[38;5;215m"
+    success: str = "\033[38;5;120m"
     error: str = "\033[38;5;203m"
     reset: str = "\033[0m"
 
@@ -31,14 +34,27 @@ class CLIStatus:
     agent_name: str
     tool_count: int
     skill_count: int
+    model: str | None = None
+    cwd: str | None = None
+    input_hint: str | None = None
 
     @classmethod
-    def from_agent(cls, agent: Agent) -> "CLIStatus":
+    def from_agent(
+        cls,
+        agent: Agent,
+        *,
+        model: str | None = None,
+        cwd: str | None = None,
+        input_hint: str | None = None,
+    ) -> "CLIStatus":
         skills = agent.skills.all() if agent.skills is not None else []
         return cls(
             agent_name=agent.name,
             tool_count=len(agent.tools),
             skill_count=len(skills),
+            model=model,
+            cwd=cwd,
+            input_hint=input_hint,
         )
 
 
@@ -63,27 +79,30 @@ class CLIRenderer:
         self.width = width or shutil.get_terminal_size((88, 24)).columns
         self.pretty = self._should_use_pretty(mode)
         self._streaming = False
+        self._turn = 0
 
     def intro(self, status: CLIStatus) -> None:
         if not self.pretty:
             return
 
-        details = [f"{status.tool_count} tools"]
+        details = []
+        if status.model:
+            details.append(status.model)
+        details.append(f"{status.tool_count} tools")
         if status.skill_count:
             details.append(f"{status.skill_count} skills")
         subtitle = " • ".join(details)
-        title = f" {self.theme.name} :: {status.agent_name} "
+        title = f"{self.theme.name} · {status.agent_name}"
 
-        inner = max(30, min(self.width - 4, 80))
-        top = "╭" + "─" * min(len(title), inner)
-        if len(title) < inner:
-            top += "─" * (inner - len(title))
-        top += "╮"
-
-        self._write(self._color(top, self.theme.accent))
-        self._write(self._line(title[:inner], inner, self.theme.accent))
-        self._write(self._line(subtitle[:inner], inner, self.theme.muted))
-        self._write(self._line("type /exit or /quit to leave", inner, self.theme.muted))
+        inner = max(46, min(self.width - 4, 96))
+        self._write(self._color("╭" + "─" * inner + "╮", self.theme.accent))
+        self._write(self._line(f" {title}", inner, self.theme.accent))
+        self._write(self._line(f" {subtitle}", inner, self.theme.muted))
+        if status.cwd:
+            self._write(self._line(f" {self._truncate_middle(status.cwd, inner - 2)}", inner, self.theme.faint))
+        self._write(self._line(" /help  /status  /usage  /undo  /retry  /exit", inner, self.theme.muted))
+        if status.input_hint:
+            self._write(self._line(f" {self._truncate(status.input_hint, inner - 2)}", inner, self.theme.faint))
         self._write(self._color("╰" + "─" * inner + "╯", self.theme.accent))
 
     def prompt(self, text: str) -> str:
@@ -92,8 +111,21 @@ class CLIRenderer:
         label = self._prompt_label(text)
         return (
             f"{self.theme.accent}{label}{self.theme.reset}"
-            f"{self.theme.muted} › {self.theme.reset}"
+            f"{self.theme.faint} ❯ {self.theme.reset}"
         )
+
+    def user(self, text: str) -> None:
+        if not self.pretty:
+            return
+        self._finish_stream()
+        self._turn += 1
+        self._write("")
+        self._write(
+            self._color(f"user #{self._turn}", self.theme.user)
+            + self._color(" ─", self.theme.faint)
+        )
+        for line in self._wrap_lines(text, max(30, min(self.width - 6, 100))):
+            self._write(self._color("│ ", self.theme.user) + line)
 
     def skill_not_invocable(self, name: str) -> None:
         self.notice(f"skill /{name} is model-only")
@@ -102,13 +134,24 @@ class CLIRenderer:
         if not self.pretty:
             self._write(text)
             return
-        self._write(self._color(f"· {text}", self.theme.muted))
+        self._write(self._color("◇ ", self.theme.faint) + self._color(text, self.theme.muted))
 
     def clear(self) -> None:
         if self.pretty:
             self._write("\033[2J\033[H")
         else:
             self._write("")
+
+    def run_start(self) -> None:
+        if not self.pretty:
+            return
+        self._write(self._color("◇ working", self.theme.faint))
+
+    def run_end(self) -> None:
+        if not self.pretty:
+            return
+        self._finish_stream()
+        self._write(self._color("◇ ready", self.theme.faint))
 
     def section(self, title: str, subtitle: str | None = None) -> None:
         if not self.pretty:
@@ -117,14 +160,13 @@ class CLIRenderer:
                 self._write(subtitle)
             return
 
-        width = max(30, min(self.width - 4, 92))
+        width = max(36, min(self.width - 4, 96))
         title_line = self._truncate(title, width - 2)
-        self._write(self._color("┌" + "─" * width + "┐", self.theme.accent))
-        self._write(self._color(f"│ {title_line.ljust(width - 1)}│", self.theme.accent))
+        self._write("")
+        self._write(self._color(f"╭─ {title_line} ", self.theme.accent) + self._color("─" * max(0, width - len(title_line) - 3) + "╮", self.theme.faint))
         if subtitle:
             subtitle_line = self._truncate(subtitle, width - 2)
-            self._write(self._color(f"│ {subtitle_line.ljust(width - 1)}│", self.theme.muted))
-        self._write(self._color("└" + "─" * width + "┘", self.theme.accent))
+            self._write(self._color("│ ", self.theme.faint) + self._color(subtitle_line, self.theme.muted))
 
     def rows(self, rows: list[tuple[str, str]], *, heading: str | None = None) -> None:
         if heading:
@@ -136,11 +178,12 @@ class CLIRenderer:
             for left, right in rows:
                 self._write(f"{left}: {right}")
             return
-        label_width = min(max(len(left) for left, _ in rows), 20)
+        label_width = min(max(len(left) for left, _ in rows), 24)
         for left, right in rows:
             value = self._truncate(right, max(20, self.width - label_width - 6))
             self._write(
-                self._color(f"{left.ljust(label_width)} ", self.theme.tool)
+                self._color("│ ", self.theme.faint)
+                + self._color(f"{left.ljust(label_width)}", self.theme.tool)
                 + self._color(f" {value}", self.theme.muted)
             )
 
@@ -162,7 +205,7 @@ class CLIRenderer:
             return f"Allow {request.tool.name} ({request.reason})? [y/N] "
         tool = self._color(request.tool.name, self.theme.tool)
         reason = self._color(request.reason, self.theme.muted)
-        return f"Allow {tool} {reason}? [y/N] "
+        return f"{self.theme.tool}allow{self.theme.reset} {tool} {reason} {self.theme.muted}[y/N]{self.theme.reset} "
 
     def event(self, event: Event) -> None:
         if event.type == "message":
@@ -203,7 +246,7 @@ class CLIRenderer:
         if not self._streaming:
             self._streaming = True
             if self.pretty:
-                self._raw(self._color("assistant", self.theme.assistant) + "\n")
+                self._raw("\n" + self._color("assistant", self.theme.assistant) + self._color(" ─", self.theme.faint) + "\n")
                 self._raw(self._color("│ ", self.theme.assistant))
         self._raw(text)
 
@@ -227,7 +270,7 @@ class CLIRenderer:
         if not self.pretty:
             return
         self._write(
-            self._color("◇ thinking ", self.theme.muted)
+            self._color("◇ thinking ", self.theme.faint)
             + self._color(event.data["text"], self.theme.muted)
         )
 
@@ -245,7 +288,7 @@ class CLIRenderer:
             parts.append(f"#{event.data.get('index', 0)}")
         summary = self._clip(" ".join(parts), limit=160)
         self._write(
-            self._color("◇ tool draft ", self.theme.tool)
+            self._color("◇ preparing ", self.theme.tool)
             + self._color(summary, self.theme.muted)
         )
 
@@ -277,17 +320,18 @@ class CLIRenderer:
         )
 
     def tool_result(self, event: Event) -> None:
-        result = str(event.data["result"])
+        result = str(event.data.get("text") or event.data["result"])
         if not self.pretty:
             self._write(result)
             return
 
         if not result:
-            self._write(self._color("  done", self.theme.muted))
+            self._write(self._color("◇ done", self.theme.success))
             return
 
-        clipped = self._clip(result, limit=900)
-        self._block("result", clipped, self.theme.muted)
+        clipped = self._clip(result, limit=1200)
+        name = event.data.get("name") or "result"
+        self._block(f"result · {name}", clipped, self.theme.muted)
 
     def denied(self, message: str) -> None:
         if not self.pretty:
@@ -309,18 +353,11 @@ class CLIRenderer:
             self.output_func(text)
 
     def _block(self, label: str, text: str, color: str) -> None:
-        width = max(30, min(self.width - 6, 92))
-        label_text = self._color(label, color)
-        self._write(f"{label_text}")
-        for paragraph in str(text).splitlines() or [""]:
-            wrapped = textwrap.wrap(
-                paragraph,
-                width=width,
-                replace_whitespace=False,
-                drop_whitespace=False,
-            ) or [""]
-            for line in wrapped:
-                self._write(self._color("│ ", color) + line)
+        width = max(36, min(self.width - 6, 100))
+        self._write("")
+        self._write(self._color(label, color) + self._color(" ─", self.theme.faint))
+        for line in self._wrap_lines(str(text), width):
+            self._write(self._color("│ ", color) + line)
 
     def _line(self, text: str, width: int, color: str) -> str:
         return self._color(f"│ {text.ljust(width)} │", color)
@@ -355,6 +392,31 @@ class CLIRenderer:
         if limit <= 1:
             return text[:limit]
         return text[: max(1, limit - 1)].rstrip() + "…"
+
+    def _truncate_middle(self, text: str, limit: int) -> str:
+        if len(text) <= limit:
+            return text
+        if limit <= 5:
+            return text[:limit]
+        left = max(1, (limit - 1) // 2)
+        right = max(1, limit - left - 1)
+        return f"{text[:left]}…{text[-right:]}"
+
+    def _wrap_lines(self, text: str, width: int) -> list[str]:
+        lines: list[str] = []
+        for paragraph in str(text).splitlines() or [""]:
+            lines.extend(
+                textwrap.wrap(
+                    paragraph,
+                    width=width,
+                    replace_whitespace=False,
+                    drop_whitespace=False,
+                    break_long_words=True,
+                    break_on_hyphens=False,
+                )
+                or [""]
+            )
+        return lines
 
     def _color(self, text: str, color: str) -> str:
         return f"{color}{text}{self.theme.reset}"

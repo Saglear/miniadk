@@ -16,6 +16,7 @@ from ..run import merge_tools
 from ..sessions import CompactSpec, compact as compact_session, sessions
 from ..skills import parse_slash_command, resolve_agent, tools_for_skill
 from .._guards import copy_guard
+from ._cli_input import CLIInput, command_names, should_use_prompt_toolkit
 from ._cli_ui import CLIRenderer, CLIStatus, CLITheme, OutputMode
 
 
@@ -32,6 +33,7 @@ def run_cli(
     prompt: str = "> ",
     output_mode: OutputMode = "auto",
     theme: CLITheme | None = None,
+    renderer: CLIRenderer | None = None,
     middleware: list[Middleware] | None = None,
     policy: RunPolicy | None = None,
     session: Session | str | Path | bool | None = None,
@@ -52,6 +54,7 @@ def run_cli(
             prompt=prompt,
             output_mode=output_mode,
             theme=theme,
+            renderer=renderer,
             policy=policy,
             middleware=middleware,
             session=session,
@@ -86,6 +89,7 @@ async def _run_cli(
     prompt: str,
     output_mode: OutputMode,
     theme: CLITheme | None,
+    renderer: CLIRenderer | None,
     policy: RunPolicy | None,
     middleware: list[Middleware] | None,
     session: Session | str | Path | None,
@@ -101,7 +105,13 @@ async def _run_cli(
         if active_tools is not None
         else resolved_agent
     )
-    renderer = CLIRenderer(output_func, mode=output_mode, theme=theme)
+    renderer = renderer or CLIRenderer(output_func, mode=output_mode, theme=theme)
+    use_prompt_toolkit = should_use_prompt_toolkit(input_func, output_func)
+    if use_prompt_toolkit:
+        input_func = CLIInput(
+            prompt=renderer.prompt(prompt),
+            commands=command_names(active_agent),
+        )
     active_session, session_path = _load_session(session, active_agent)
     if active_session is not None:
         await compact_session(active_session, model=model, spec=compact)
@@ -121,7 +131,18 @@ async def _run_cli(
         session=active_session,
         max_steps=max_steps,
     )
-    renderer.intro(CLIStatus.from_agent(active_agent))
+    renderer.intro(
+        CLIStatus.from_agent(
+            active_agent,
+            model=_model_label(model),
+            cwd=os.getcwd(),
+            input_hint=(
+                "history, slash completion, multiline input; Ctrl-J inserts newline, Esc+Enter sends"
+                if use_prompt_toolkit
+                else None
+            ),
+        )
+    )
     prompt_text = renderer.prompt(prompt)
 
     while True:
@@ -157,6 +178,7 @@ async def _run_cli(
                         renderer.skill_not_invocable(skill.name)
                         continue
                     filtered_tools = tools_for_skill(active_agent, skill.name)
+                    renderer.user(user_input)
                     user_input = skill.render(args).text
                     try:
                         await _render_run(
@@ -173,6 +195,7 @@ async def _run_cli(
                     continue
 
         try:
+            renderer.user(user_input)
             await _render_run(runtime, user_input, renderer)
             await compact_session(runtime.session, model=model, spec=compact)
         except RuntimeError as error:
@@ -188,13 +211,18 @@ async def _render_run(
     *,
     tools=None,
 ) -> None:
-    async for event in runtime.run(user_input, tools=tools):
-        renderer.event(event)
+    renderer.run_start()
+    try:
+        async for event in runtime.run(user_input, tools=tools):
+            renderer.event(event)
+    finally:
+        renderer.run_end()
 
 
 def _ask_user(input_func: InputFunc, renderer: CLIRenderer):
     def ask(request: PermissionRequest) -> bool:
-        answer = input_func(renderer.permission_prompt(request))
+        ask_input = getattr(input_func, "ask", input_func)
+        answer = ask_input(renderer.permission_prompt(request))
         return answer.strip().lower() in {"y", "yes"}
 
     return ask
@@ -264,6 +292,12 @@ async def _handle_builtin_command(
     if normalized == "status":
         _render_status(agent, runtime, renderer, model_label)
         return True
+    if normalized == "usage":
+        _render_usage(runtime, renderer)
+        return True
+    if normalized == "theme":
+        _render_theme(renderer)
+        return True
     if normalized == "tools":
         _render_tools(agent, renderer)
         return True
@@ -276,9 +310,23 @@ async def _handle_builtin_command(
     if normalized == "clear":
         renderer.clear()
         return True
-    if normalized == "reset":
+    if normalized in {"reset", "new"}:
         runtime.session.messages[:] = [Message("system", agent.instructions)]
         renderer.notice("session reset")
+        return True
+    if normalized == "undo":
+        removed = _undo_last_turn(runtime.session.messages)
+        renderer.notice("nothing to undo" if removed == 0 else f"removed {removed} messages")
+        return True
+    if normalized == "retry":
+        retry_input = _pop_last_user_turn(runtime.session.messages)
+        if retry_input is None:
+            renderer.notice("nothing to retry")
+            return True
+        renderer.notice("retrying last turn")
+        renderer.user(retry_input)
+        await _render_run(runtime, retry_input, renderer)
+        await compact_session(runtime.session, model=model, spec=compact)
         return True
     if normalized == "compact":
         await _render_compact(runtime, renderer, model, compact_keep)
@@ -287,19 +335,36 @@ async def _handle_builtin_command(
 
 
 def _render_help(agent: Agent, renderer: CLIRenderer) -> None:
-    builtins = [
-        "/help - show this screen",
-        "/status - show session state",
-        "/tools - list tools",
-        "/skills - list skills",
-        "/todos - show current todo list",
-        "/clear - clear the screen",
-        "/reset - clear conversation history",
-        "/compact - show a compact transcript snapshot",
-        "/exit or /quit - leave the session",
-    ]
     renderer.section(f"{agent.name} command center", "adapter-level commands")
-    renderer.bullets(builtins, heading="Built-ins")
+    renderer.rows(
+        [
+            ("/help", "show this screen"),
+            ("/status", "show session and model state"),
+            ("/usage", "show message, tool-call, and character counts"),
+            ("/theme", "show active renderer theme fields"),
+        ],
+        heading="Inspect",
+    )
+    renderer.rows(
+        [
+            ("/tools", "list tools exposed to the model"),
+            ("/skills", "list loaded skills and invocation modes"),
+            ("/todos", "show current todo list when a policy provides one"),
+        ],
+        heading="Capabilities",
+    )
+    renderer.rows(
+        [
+            ("/clear", "clear the terminal"),
+            ("/new", "start a fresh conversation"),
+            ("/reset", "clear conversation history"),
+            ("/undo", "remove the last user turn and its response"),
+            ("/retry", "remove the last assistant response and rerun the last user turn"),
+            ("/compact", "show or create a compact transcript snapshot"),
+            ("/exit", "leave the session"),
+        ],
+        heading="Session",
+    )
     _render_skills(agent, renderer, heading="Available skills")
 
 
@@ -326,6 +391,32 @@ def _render_status(
     )
     if runtime.messages:
         renderer.notice(f"last role: {runtime.messages[-1].role}")
+
+
+def _render_usage(runtime: Runtime, renderer: CLIRenderer) -> None:
+    stats = runtime.session.stats
+    renderer.rows(
+        [
+            ("messages", str(stats.messages)),
+            ("tool calls", str(stats.tool_calls)),
+            ("chars", str(stats.chars)),
+        ],
+        heading="Usage",
+    )
+
+
+def _render_theme(renderer: CLIRenderer) -> None:
+    theme = renderer.theme
+    renderer.rows(
+        [
+            ("name", theme.name),
+            ("accent", _visible_ansi(theme.accent)),
+            ("assistant", _visible_ansi(theme.assistant)),
+            ("tool", _visible_ansi(theme.tool)),
+            ("error", _visible_ansi(theme.error)),
+        ],
+        heading="Theme",
+    )
 
 
 def _render_todos(policy: RunPolicy | None, renderer: CLIRenderer) -> None:
@@ -363,6 +454,39 @@ def _tool_flag(tool, method: str) -> bool:
         return bool(getattr(tool, method)())
     except Exception:
         return False
+
+
+def _visible_ansi(value: str) -> str:
+    return value.replace("\033", "\\033")
+
+
+def _undo_last_turn(messages: list[Message]) -> int:
+    if len(messages) <= 1:
+        return 0
+    last_user = _last_user_index(messages)
+    if last_user is None:
+        return 0
+    removed = len(messages) - last_user
+    del messages[last_user:]
+    return removed
+
+
+def _pop_last_user_turn(messages: list[Message]) -> str | None:
+    if len(messages) <= 1:
+        return None
+    last_user = _last_user_index(messages)
+    if last_user is None:
+        return None
+    user_input = messages[last_user].content
+    del messages[last_user:]
+    return user_input
+
+
+def _last_user_index(messages: list[Message]) -> int | None:
+    for index in range(len(messages) - 1, 0, -1):
+        if messages[index].role == "user":
+            return index
+    return None
 
 
 def _render_skills(

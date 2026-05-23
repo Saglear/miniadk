@@ -175,6 +175,18 @@ agent = Agent(
 run_cli(agent, model=model())
 ```
 
+如果产品需要自己的终端风格，可以替换 CLI renderer：
+
+```py
+from miniadk import CLIRenderer, run_cli
+
+run_cli(agent, renderer=CLIRenderer(print, mode="pretty"))
+```
+
+在真实交互终端中，默认 Python CLI 支持历史记录、slash 命令补全、多行输入和
+流式事件渲染。产品可以直接使用默认体验，也可以替换 renderer/input 层来构建
+自己的终端界面。
+
 ## 核心结构
 
 运行循环保持直接：

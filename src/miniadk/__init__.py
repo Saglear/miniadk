@@ -1,4 +1,5 @@
 from .adapters import (
+    CLIRenderer,
     CLITheme,
     astream_json,
     event_dict,
@@ -122,6 +123,7 @@ __all__ = [
     "astream_json",
     "canonical_tool_name",
     "CHAT_INSTRUCTIONS",
+    "CLIRenderer",
     "CLITheme",
     "Compact",
     "compact",

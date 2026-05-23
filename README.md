@@ -179,6 +179,19 @@ agent = Agent(
 run_cli(agent, model=model())
 ```
 
+CLI rendering is replaceable for products that want their own terminal style:
+
+```py
+from miniadk import CLIRenderer, run_cli
+
+run_cli(agent, renderer=CLIRenderer(print, mode="pretty"))
+```
+
+In an interactive terminal, the default Python CLI uses history, slash-command
+completion, multiline editing, and streaming event rendering. Products can keep
+that default or replace the renderer/input layer when they need a custom
+terminal experience.
+
 ## Core Shape
 
 The runtime loop is intentionally direct:

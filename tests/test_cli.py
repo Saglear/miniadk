@@ -1,6 +1,8 @@
 import miniadk.adapters.cli as cli_adapter
+import miniadk.adapters._cli_input as cli_input
 from miniadk import (
     Agent,
+    CLIRenderer,
     Compact,
     Guard,
     Message,
@@ -300,7 +302,7 @@ def test_run_cli_pretty_mode_renders_internal_streaming_deltas():
     rendered = "\n".join(outputs)
     assert "◇ thinking" in rendered
     assert "checking context" in rendered
-    assert "◇ tool draft" in rendered
+    assert "◇ preparing" in rendered
     assert "read_file" in rendered
     assert "path" in rendered
 
@@ -465,13 +467,168 @@ def test_run_cli_pretty_mode_renders_status_and_events():
     )
 
     rendered = "\n".join(outputs)
-    assert "miniadk :: cli" in rendered
+    assert "miniadk" in rendered
+    assert "cli" in rendered
+    assert "ScriptedModel" in rendered
+    assert "user #1" in rendered
+    assert "/usage" in rendered
+    assert "/undo" in rendered
+    assert "/retry" in rendered
     assert "◇ tool" in rendered
     assert "◇ progress" in rendered
     assert "working" in rendered
     assert "echo" in rendered
     assert "assistant" in rendered
     assert "done" in rendered
+    assert "◇ working" in rendered
+    assert "◇ ready" in rendered
+
+
+def test_run_cli_accepts_custom_renderer_for_adk_products():
+    class RecordingRenderer(CLIRenderer):
+        def __init__(self):
+            super().__init__(lambda text: None, mode="plain")
+            self.events = []
+
+        def intro(self, status):
+            self.events.append(("intro", status.agent_name))
+
+        def user(self, text):
+            self.events.append(("user", text))
+
+        def event(self, event):
+            self.events.append(("event", event.type))
+
+        def run_start(self):
+            self.events.append(("run_start", ""))
+
+        def run_end(self):
+            self.events.append(("run_end", ""))
+
+        def prompt(self, text):
+            return "custom> "
+
+    inputs = iter(["hello", "/exit"])
+    renderer = RecordingRenderer()
+
+    run_cli(
+        Agent(name="cli", instructions="Answer.", tools=[]),
+        model=ScriptedModel([ModelResult(message="hi")]),
+        input_func=lambda prompt: next(inputs),
+        output_func=lambda text: None,
+        renderer=renderer,
+    )
+
+    assert renderer.events == [
+        ("intro", "cli"),
+        ("user", "hello"),
+        ("run_start", ""),
+        ("event", "message"),
+        ("run_end", ""),
+    ]
+
+
+def test_run_cli_uses_prompt_toolkit_input_for_real_tty(monkeypatch):
+    created = []
+
+    class FakeCLIInput:
+        def __init__(self, *, prompt, commands, history_path=None):
+            created.append((prompt, commands, history_path))
+            self.items = iter(["/exit"])
+
+        def __call__(self, prompt=None):
+            return next(self.items)
+
+    monkeypatch.setattr(cli_adapter, "should_use_prompt_toolkit", lambda input_func, output_func: True)
+    monkeypatch.setattr(cli_adapter, "CLIInput", FakeCLIInput)
+
+    run_cli(
+        Agent(name="cli", instructions="Answer.", tools=[]),
+        model=ScriptedModel([]),
+    )
+
+    assert created
+    assert "/help" in created[0][1]
+    assert "/exit" in created[0][1]
+    assert "/undo" in created[0][1]
+    assert "/retry" in created[0][1]
+    assert "/new" in created[0][1]
+
+
+def test_run_cli_intro_mentions_prompt_toolkit_input_features(monkeypatch):
+    outputs = []
+
+    class FakeCLIInput:
+        def __init__(self, *, prompt, commands, history_path=None):
+            self.items = iter(["/exit"])
+
+        def __call__(self, prompt=None):
+            return next(self.items)
+
+    monkeypatch.setattr(cli_adapter, "should_use_prompt_toolkit", lambda input_func, output_func: True)
+    monkeypatch.setattr(cli_adapter, "CLIInput", FakeCLIInput)
+
+    run_cli(
+        Agent(name="cli", instructions="Answer.", tools=[]),
+        model=ScriptedModel([]),
+        output_func=outputs.append,
+        output_mode="pretty",
+    )
+
+    rendered = "\n".join(outputs)
+    assert "history" in rendered
+    assert "slash completion" in rendered
+    assert "multiline input" in rendered
+
+
+def test_run_cli_uses_prompt_toolkit_single_line_ask_for_permissions(monkeypatch):
+    calls = []
+
+    class FakeCLIInput:
+        def __init__(self, *, prompt, commands, history_path=None):
+            self.items = iter(["write", "/exit"])
+
+        def __call__(self, prompt=None):
+            calls.append(("main", prompt))
+            return next(self.items)
+
+        def ask(self, prompt):
+            calls.append(("ask", prompt))
+            return "y"
+
+    @tool(destructive=True)
+    def write_note(path: str) -> str:
+        """Write a note."""
+        return path
+
+    monkeypatch.setattr(cli_adapter, "should_use_prompt_toolkit", lambda input_func, output_func: True)
+    monkeypatch.setattr(cli_adapter, "CLIInput", FakeCLIInput)
+
+    run_cli(
+        Agent(name="cli", instructions="Use tools.", tools=[write_note]),
+        model=ScriptedModel(
+            [
+                ModelResult(
+                    tool_calls=[
+                        ToolCall(name="write_note", arguments={"path": "a.txt"})
+                    ]
+                ),
+                ModelResult(message="done"),
+            ]
+        ),
+    )
+
+    assert [kind for kind, _ in calls] == ["main", "ask", "main"]
+    assert "allow" in calls[1][1].lower()
+
+
+def test_should_use_prompt_toolkit_respects_custom_io(monkeypatch):
+    monkeypatch.setattr(cli_input.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli_input.sys.stdout, "isatty", lambda: True)
+
+    assert cli_input.should_use_prompt_toolkit(input, print) is True
+    assert cli_input.should_use_prompt_toolkit(lambda prompt: "", print) is False
+    assert cli_input.should_use_prompt_toolkit(input, lambda text: None) is False
 
 
 def test_run_cli_pretty_mode_uses_custom_prompt_text():
@@ -526,8 +683,15 @@ def test_run_cli_handles_builtin_help_without_model_call():
     )
 
     rendered = "\n".join(outputs)
-    assert "Built-ins" in rendered
+    assert "Inspect" in rendered
+    assert "Capabilities" in rendered
+    assert "Session" in rendered
     assert "/status" in rendered
+    assert "/usage" in rendered
+    assert "/theme" in rendered
+    assert "/undo" in rendered
+    assert "/retry" in rendered
+    assert "/new" in rendered
     assert "/review" in rendered
     assert model.calls == []
 
@@ -552,6 +716,47 @@ def test_run_cli_status_uses_session_stats():
     assert "tool calls: 0" in rendered
     assert "chars:" in rendered
     assert "last role: assistant" in rendered
+
+
+def test_run_cli_usage_shows_session_counts_without_model_call():
+    inputs = iter(["hello", "/usage", "/exit"])
+    outputs = []
+
+    agent = Agent(name="cli", instructions="Answer.", tools=[])
+    model = ScriptedModel([ModelResult(message="hi")])
+
+    run_cli(
+        agent,
+        model=model,
+        input_func=lambda prompt: next(inputs),
+        output_func=outputs.append,
+        output_mode="plain",
+    )
+
+    rendered = "\n".join(outputs)
+    assert "Usage" in rendered
+    assert "messages: 3" in rendered
+    assert "tool calls: 0" in rendered
+    assert "chars:" in rendered
+    assert len(model.calls) == 1
+
+
+def test_run_cli_theme_describes_active_theme_without_model_call():
+    inputs = iter(["/theme", "/exit"])
+    outputs = []
+
+    run_cli(
+        Agent(name="cli", instructions="Answer.", tools=[]),
+        model=ScriptedModel([ModelResult(message="should not be used")]),
+        input_func=lambda prompt: next(inputs),
+        output_func=outputs.append,
+        output_mode="plain",
+    )
+
+    rendered = "\n".join(outputs)
+    assert "Theme" in rendered
+    assert "name: miniadk" in rendered
+    assert "accent: \\033" in rendered
 
 
 def test_run_cli_todos_shows_agentic_todo_store_without_model_call(tmp_path):
@@ -1002,6 +1207,81 @@ def test_run_cli_reset_clears_conversation_history_without_model_call():
     assert "messages: 1" in rendered
     assert "last role: system" in rendered
     assert len(model.calls) == 1
+
+
+def test_run_cli_new_alias_clears_conversation_history_without_model_call():
+    inputs = iter(["hello", "/new", "/status", "/exit"])
+    outputs = []
+
+    agent = Agent(name="cli", instructions="Answer.", tools=[])
+    model = ScriptedModel([ModelResult(message="hi")])
+
+    run_cli(
+        agent,
+        model=model,
+        input_func=lambda prompt: next(inputs),
+        output_func=outputs.append,
+        output_mode="plain",
+    )
+
+    rendered = "\n".join(outputs)
+    assert "session reset" in rendered
+    assert "messages: 1" in rendered
+    assert len(model.calls) == 1
+
+
+def test_run_cli_undo_removes_last_turn_without_model_call():
+    inputs = iter(["first", "second", "/undo", "/status", "/exit"])
+    outputs = []
+
+    agent = Agent(name="cli", instructions="Answer.", tools=[])
+    model = ScriptedModel(
+        [
+            ModelResult(message="one"),
+            ModelResult(message="two"),
+        ]
+    )
+
+    run_cli(
+        agent,
+        model=model,
+        input_func=lambda prompt: next(inputs),
+        output_func=outputs.append,
+        output_mode="plain",
+    )
+
+    rendered = "\n".join(outputs)
+    assert "removed 2 messages" in rendered
+    assert "messages: 3" in rendered
+    assert len(model.calls) == 2
+
+
+def test_run_cli_retry_reruns_last_turn():
+    inputs = iter(["hello", "/retry", "/status", "/exit"])
+    outputs = []
+
+    agent = Agent(name="cli", instructions="Answer.", tools=[])
+    model = ScriptedModel(
+        [
+            ModelResult(message="first"),
+            ModelResult(message="second"),
+        ]
+    )
+
+    run_cli(
+        agent,
+        model=model,
+        input_func=lambda prompt: next(inputs),
+        output_func=outputs.append,
+        output_mode="plain",
+    )
+
+    rendered = "\n".join(outputs)
+    assert "retrying last turn" in rendered
+    assert "first" in outputs
+    assert "second" in outputs
+    assert "messages: 3" in rendered
+    assert len(model.calls) == 2
 
 
 def test_run_cli_reset_persists_cleared_session_to_path(tmp_path):
