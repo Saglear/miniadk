@@ -1,3 +1,5 @@
+import asyncio
+
 import miniadk.adapters.cli as cli_adapter
 from miniadk import (
     Agent,
@@ -64,6 +66,119 @@ def test_run_cli_renders_runtime_messages():
     )
 
     assert outputs == ["hi from agent"]
+
+
+def test_run_cli_uses_terminal_bridge_for_real_tty(monkeypatch):
+    called = []
+
+    async def fake_terminal_cli(**kwargs):
+        called.append(kwargs)
+
+    monkeypatch.setattr(cli_adapter.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli_adapter.sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(cli_adapter.shutil, "which", lambda name: "/usr/bin/node")
+    monkeypatch.setattr(cli_adapter, "_node_supports_type_stripping", lambda node: True)
+    monkeypatch.setattr(cli_adapter, "_run_terminal_cli", fake_terminal_cli)
+
+    agent = Agent(name="cli", instructions="Answer.", tools=[])
+    model = ScriptedModel([ModelResult(message="hi")])
+
+    run_cli(agent, model=model)
+
+    assert called
+    assert called[0]["agent"] is agent
+    assert called[0]["model"] is model
+
+
+def test_run_cli_keeps_python_adapter_for_custom_io(monkeypatch):
+    async def fail_terminal_cli(**kwargs):
+        raise AssertionError("terminal bridge should not be used")
+
+    monkeypatch.setattr(cli_adapter.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli_adapter.sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(cli_adapter.shutil, "which", lambda name: "/usr/bin/node")
+    monkeypatch.setattr(cli_adapter, "_node_supports_type_stripping", lambda node: True)
+    monkeypatch.setattr(cli_adapter, "_run_terminal_cli", fail_terminal_cli)
+
+    inputs = iter(["hello", "/exit"])
+    outputs = []
+
+    run_cli(
+        Agent(name="cli", instructions="Answer.", tools=[]),
+        model=ScriptedModel([ModelResult(message="hi")]),
+        input_func=lambda prompt: next(inputs),
+        output_func=outputs.append,
+    )
+
+    assert outputs == ["hi"]
+
+
+def test_terminal_bridge_streams_runtime_events():
+    async def scenario():
+        agent = Agent(name="cli", instructions="Answer.", tools=[])
+        model = ScriptedModel([ModelResult(message="hi from bridge")])
+        server = await asyncio.start_server(
+            lambda reader, writer: cli_adapter._serve_terminal_cli(
+                reader,
+                writer,
+                token="test-token",
+                agent=agent,
+                model=model,
+                prompt="mini > ",
+                theme=None,
+                policy=None,
+                middleware=None,
+                session=None,
+                tools=None,
+                max_steps=20,
+                compact=None,
+                compact_keep=10,
+            ),
+            "127.0.0.1",
+            0,
+        )
+        port = server.sockets[0].getsockname()[1]
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+
+        def send(message):
+            import json
+
+            writer.write(json.dumps(message).encode("utf-8") + b"\n")
+
+        async def recv():
+            import json
+
+            return json.loads((await reader.readline()).decode("utf-8"))
+
+        try:
+            send({"type": "hello", "token": "test-token"})
+            await writer.drain()
+            ready = await recv()
+
+            send({"type": "input", "text": "hello"})
+            await writer.drain()
+            events = [await recv(), await recv(), await recv(), await recv()]
+
+            send({"type": "exit"})
+            await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+            server.close()
+            await server.wait_closed()
+
+        assert ready["type"] == "ready"
+        assert ready["data"]["agent"] == "cli"
+        assert [item["type"] for item in events] == [
+            "run_start",
+            "event",
+            "run_end",
+            "idle",
+        ]
+        assert events[1]["data"]["type"] == "message"
+        assert events[1]["data"]["data"]["text"] == "hi from bridge"
+
+    asyncio.run(scenario())
 
 
 def test_run_cli_can_use_default_model_helper(monkeypatch):
