@@ -49,7 +49,7 @@ class OpenAIModel:
         )
         self.http_client = http_client or JsonHttpClient(
             timeout_seconds=_transport_float(
-                timeout, 60, "OPENAI_TIMEOUT", "MINIADK_MODEL_TIMEOUT"
+                timeout, 600, "OPENAI_TIMEOUT", "MINIADK_MODEL_TIMEOUT"
             ),
             retries=_transport_int(retries, 0, "OPENAI_RETRIES", "MINIADK_MODEL_RETRIES"),
             retry_delay=_transport_float(

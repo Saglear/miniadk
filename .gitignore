@@ -1,16 +1,41 @@
+# ── Python ─────────────────────────────────────────────────────────────
 .venv/
-.env
 __pycache__/
-.pytest_cache/
 *.py[cod]
+.pytest_cache/
+
+# ── secrets & local config ─────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── packaging artifacts ────────────────────────────────────────────────
 dist/
 build/
 *.egg-info/
-.github/*
-!.github/workflows/
-.github/workflows/*
-!.github/workflows/workflow.yml
+
+# ── IDE / editor scratch ───────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── per-user runtime state (never commit conversation transcripts) ────
+.miniadk/
+
+# ── working notes & scratch ────────────────────────────────────────────
 .planning/
 agent_colab/
 debug/
+goal/
+tmp/
 AGENT.md
+
+# ── JS toolchain artifacts ─────────────────────────────────────────────
+node_modules/
+tui-ts/dist/
+examples/custom_tui/node_modules/
+
+# ── GitHub: track only workflow files, not anything else under .github/
+.github/*
+!.github/workflows/

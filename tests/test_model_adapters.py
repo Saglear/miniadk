@@ -5,7 +5,7 @@ from urllib.error import HTTPError
 import pytest
 
 from miniadk import Message, ModelResult, ModelStreamEvent, Tool, ToolCall, tool
-from miniadk.models.anthropic import AnthropicModel
+from miniadk.models.anthropic import AnthropicModel, _default_max_tokens
 from miniadk.models.factory import model
 from miniadk.models.openai import OpenAIModel
 
@@ -1498,6 +1498,9 @@ def test_anthropic_model_requires_tool_use_input_object():
 
 
 async def test_anthropic_model_reports_malformed_streamed_tool_use_input():
+    """Unrepairable JSON degrades gracefully — surface a sentinel input
+    plus a repair note rather than aborting the whole turn."""
+
     class FakeHttpClient:
         async def post_sse(self, url, payload, headers):
             yield {
@@ -1522,9 +1525,67 @@ async def test_anthropic_model_reports_malformed_streamed_tool_use_input():
         http_client=FakeHttpClient(),
     )
 
-    with pytest.raises(RuntimeError, match="Anthropic streamed tool_use input is not valid JSON"):
-        async for _ in model.stream([Message("user", "hi")], []):
-            pass
+    final = None
+    async for event in model.stream([Message("user", "hi")], []):
+        if event.result is not None:
+            final = event.result
+
+    assert final is not None
+    assert final.tool_calls and final.tool_calls[0].name == "greet"
+    assert "_miniadk_invalid_input" in final.tool_calls[0].arguments
+    # The block carries a human-readable repair note for the runtime / TUI.
+    assert any(
+        block.get("_partial_json_repair")
+        for block in (final.content_blocks or [])
+    )
+
+
+async def test_anthropic_model_repairs_truncated_streamed_tool_use_input():
+    """Truncated JSON (e.g. max_tokens cutoff) gets auto-repaired."""
+
+    class FakeHttpClient:
+        async def post_sse(self, url, payload, headers):
+            yield {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "write_file",
+                },
+            }
+            # Simulate a truncation mid-string — what max_tokens does in
+            # practice. The "}\"" at the end is missing entirely.
+            yield {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {
+                    "type": "input_json_delta",
+                    "partial_json": '{"path": "x.md", "content": "hello',
+                },
+            }
+
+    model = AnthropicModel(
+        api_key="key",
+        base_url="https://api.example.test",
+        model="demo",
+        http_client=FakeHttpClient(),
+    )
+
+    final = None
+    async for event in model.stream([Message("user", "hi")], []):
+        if event.result is not None:
+            final = event.result
+
+    assert final is not None
+    call = final.tool_calls[0]
+    assert call.arguments == {"path": "x.md", "content": "hello"}
+    note = next(
+        block.get("_partial_json_repair")
+        for block in (final.content_blocks or [])
+        if block.get("type") == "tool_use"
+    )
+    assert note and "auto-repaired" in note
 
 
 async def test_anthropic_model_reports_streamed_tool_use_missing_identity():
@@ -1580,3 +1641,73 @@ def test_model_adapters_hide_http_error_bodies():
 
     assert str(anthropic_error.value) == "Model request failed with HTTP 403: Forbidden"
     assert "anthropic-secret" not in str(anthropic_error.value)
+
+
+# ─── max_tokens defaults table ───────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "model,expected",
+    [
+        # Claude 4.x
+        ("claude-opus-4-7", 64_000),
+        ("claude-opus-4-7-20260416", 64_000),
+        ("claude-sonnet-4-6", 64_000),
+        ("claude-haiku-4-5", 16_384),
+        # GPT-5.x
+        ("gpt-5", 128_000),
+        ("gpt-5.1", 128_000),
+        ("gpt-5.5", 128_000),
+        ("gpt-5-pro", 128_000),
+        # DeepSeek V4
+        ("deepseek-v4-pro", 65_536),
+        ("deepseek-v4-flash", 32_768),
+        ("deepseek-v4", 32_768),
+        # MiniMax
+        ("minimax-2.7", 65_536),
+        ("minimax-2.5", 65_536),
+        # GLM
+        ("glm-5", 32_768),
+        ("glm-5.1", 32_768),
+        # Kimi
+        ("kimi-2.6", 65_536),
+        ("kimi-2.5", 65_536),
+        # Qwen
+        ("qwen3-coder", 65_536),
+        # Unknown → fallback
+        ("totally-made-up-model-7b", 32_768),
+        ("", 32_768),
+    ],
+)
+def test_anthropic_default_max_tokens_table(model, expected):
+    assert _default_max_tokens(model) == expected
+
+
+def test_anthropic_model_uses_table_for_default_max_tokens(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_MAX_TOKENS", raising=False)
+    monkeypatch.delenv("MINIADK_MODEL_MAX_TOKENS", raising=False)
+
+    sonnet = AnthropicModel(api_key="x", base_url="https://example.test", model="claude-sonnet-4-6")
+    haiku = AnthropicModel(api_key="x", base_url="https://example.test", model="claude-haiku-4-5")
+    unknown = AnthropicModel(api_key="x", base_url="https://example.test", model="some-future-model")
+
+    assert sonnet.max_tokens == 64_000
+    assert haiku.max_tokens == 16_384
+    assert unknown.max_tokens == 32_768  # fallback
+
+
+def test_anthropic_model_max_tokens_env_overrides_table(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_MAX_TOKENS", "1234")
+    model = AnthropicModel(api_key="x", base_url="https://example.test", model="claude-sonnet-4-6")
+    assert model.max_tokens == 1234
+
+
+def test_anthropic_model_max_tokens_explicit_overrides_env(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_MAX_TOKENS", "1234")
+    model = AnthropicModel(
+        api_key="x",
+        base_url="https://example.test",
+        model="claude-sonnet-4-6",
+        max_tokens=4321,
+    )
+    assert model.max_tokens == 4321

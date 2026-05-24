@@ -33,7 +33,12 @@ class ShellResult:
 def make_shell(
     *,
     cwd: str | Path = ".",
-    timeout_seconds: float = 30,
+    # ``None`` means no timeout — the agent runs the command to
+    # completion. This is the right default for an agent product:
+    # build / test / install / long-running scripts are normal use,
+    # and an arbitrary cap creates more pain than it prevents. Users
+    # who need a hard ceiling pass an explicit number.
+    timeout_seconds: float | None = None,
     validate: Callable[[str], bool | str | None] | None = None,
     read: ReadRule = False,
     max_output: int | None = None,
@@ -46,8 +51,8 @@ def make_shell(
     def validate_command(command: str, cwd: str = "."):
         if not command.strip():
             return "shell command is required"
-        if timeout_seconds <= 0:
-            return "shell timeout must be > 0"
+        if timeout_seconds is not None and timeout_seconds <= 0:
+            return "shell timeout must be > 0 (or omit it for no timeout)"
         if not cwd_path.exists():
             return f"shell cwd does not exist: {cwd_path}"
         if not cwd_path.is_dir():
@@ -114,7 +119,7 @@ def _read_matcher(read: ReadRule) -> Callable[[str], bool]:
 async def _run_shell(
     command: str,
     cwd: Path,
-    timeout_seconds: float,
+    timeout_seconds: float | None,
     max_output: int | None,
     env: dict[str, str] | None,
     input: str | None,
@@ -130,10 +135,15 @@ async def _run_shell(
             env=env,
             start_new_session=True,
         )
-        stdout, stderr = await asyncio.wait_for(
-            process.communicate(None if input is None else input.encode()),
-            timeout=timeout_seconds,
-        )
+        if timeout_seconds is None:
+            stdout, stderr = await process.communicate(
+                None if input is None else input.encode()
+            )
+        else:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(None if input is None else input.encode()),
+                timeout=timeout_seconds,
+            )
         stdout_text, stderr_text = _clip_streams(stdout, stderr, max_output)
         return ShellResult(
             command=command,

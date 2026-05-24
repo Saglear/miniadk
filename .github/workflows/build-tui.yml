@@ -1,0 +1,83 @@
+name: build-tui
+
+# Build the Ink TUI binary for all five supported targets and upload
+# them as workflow artifacts. Triggered manually or on tag push so we
+# don't burn CI minutes on every commit.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x64
+            os: ubuntu-latest
+            bun_target: bun-linux-x64
+            artifact: miniadk-tui-linux-x64
+          - target: linux-arm64
+            os: ubuntu-latest
+            bun_target: bun-linux-arm64
+            artifact: miniadk-tui-linux-arm64
+          - target: darwin-x64
+            os: macos-13
+            bun_target: bun-darwin-x64
+            artifact: miniadk-tui-darwin-x64
+          - target: darwin-arm64
+            os: macos-14
+            bun_target: bun-darwin-arm64
+            artifact: miniadk-tui-darwin-arm64
+          - target: windows-x64
+            os: ubuntu-latest
+            bun_target: bun-windows-x64
+            artifact: miniadk-tui-windows-x64.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install deps
+        working-directory: tui-ts
+        run: bun install --frozen-lockfile
+
+      - name: Build binary
+        working-directory: tui-ts
+        run: |
+          bun build --compile --target=${{ matrix.bun_target }} \
+            --external react-devtools-core --external yoga-wasm-web \
+            src/index.tsx --outfile dist/${{ matrix.artifact }}
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: tui-ts/dist/${{ matrix.artifact }}
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: attach-to-release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Attach binaries to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*

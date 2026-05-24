@@ -11,7 +11,13 @@ from urllib.request import Request, urlopen
 
 @dataclass(slots=True)
 class JsonHttpClient:
-    timeout_seconds: float = 60
+    # Default 10 minutes. Reasoning models (o-series, Claude with
+    # extended thinking, etc.) routinely think for several minutes;
+    # large requests with long context add another minute or two.
+    # 60s — the old default — was a Web-API-from-2015 number, not an
+    # agent number. Per-call override is still available, and the
+    # ``MINIADK_HTTP_TIMEOUT`` env var trumps both.
+    timeout_seconds: float = 600
     retries: int = 0
     retry_delay: float = 0.25
 

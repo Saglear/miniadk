@@ -1208,7 +1208,7 @@ async def test_shell_tool_validates_positive_timeout(tmp_path):
     validation = await shell.validate(command="printf hello")
 
     assert validation.ok is False
-    assert validation.message == "shell timeout must be > 0"
+    assert validation.message.startswith("shell timeout must be > 0")
 
 
 async def test_shell_tool_reports_timeout(tmp_path):

@@ -2,254 +2,233 @@
 
 [简体中文](README.zh-CN.md)
 
-MiniADK is a small Python Agent Development Kit for building tool-using agents
-with a compact, readable API.
+A small Python Agent Development Kit. Build tool-using agents with a
+compact, readable API. The core stays small; providers, tools,
+policies, skills, MCP, CLI adapters, and presets live around it.
 
-It gives you the pieces needed to build agent products:
-
-- `Agent` for instructions and capabilities
-- `Model` adapters for LLM providers
-- `Tool` wrappers for Python functions
-- `Runtime` for the agent loop
-- `Event` streams for adapters and UIs
-- `Session` helpers for conversation state
-
-MiniADK is a development kit, not a finished agent product. The core stays
-small, while providers, tools, policies, skills, MCP, CLI adapters, and presets
-live around it.
+MiniADK is a development kit, **not a finished agent product**. We
+ship the building blocks; you write the smarts.
 
 ## Install
 
-Clone the source and install it in editable mode:
+```bash
+pip install miniadk
+```
+
+That's it for the core. The default terminal UI (Ink, written in
+TypeScript) is downloaded on first use of `run_cli` and cached in
+`~/.cache/miniadk/tui/`. If you'd rather skip the network fetch:
+
+```bash
+pip install miniadk[tui-textual]   # pure-Python fallback TUI
+```
+
+Then set `MINIADK_TUI_NO_FETCH=1` in your environment, or pass
+`backend="textual"` to `run_cli`.
+
+For development:
 
 ```bash
 git clone https://github.com/Saglear/miniadk.git
 cd miniadk
 uv sync --extra dev
-```
-
-Run the test suite:
-
-```bash
 uv run --extra dev pytest -q
 ```
 
-## Quick Start
+## Three quickstarts
+
+### 1. Headless agent (≤ 15 lines)
 
 ```py
-from miniadk import Agent, model, run_cli, tool
-
+from miniadk import Agent, run, tool
 
 @tool
-def add(left: int, right: int) -> int:
-    """Add two numbers."""
-    return left + right
+def add(a: int, b: int) -> int:
+    "Return a + b."
+    return a + b
 
-
-agent = Agent(
-    "calc",
-    "Use tools when they help.",
-    tools=[add],
-)
-
-run_cli(agent, model=model())
+agent = Agent("calc", "Use tools when they help.", tools=[add])
+print(run(agent, "What is 17 + 25?"))
 ```
 
-Run it:
-
-```bash
-uv run python calc.py
-```
-
-## One-Shot Calls
+### 2. Default terminal UI (≤ 10 lines)
 
 ```py
-from miniadk import Agent, model, run, tool
+from miniadk import Agent, make_tools, run_cli
 
-
-@tool
-def greet(name: str) -> str:
-    """Return a greeting."""
-    return f"hello {name}"
-
-
-agent = Agent("hello", "Use tools when useful.", tools=[greet])
-answer = run(agent, "Greet Ada", model=model())
-print(answer)
+run_cli(Agent(
+    "repo",
+    "Answer questions about this repository.",
+    tools=make_tools(write=False, shell=False),
+))
 ```
+
+### 3. Custom React/Ink UI (~30 lines, see `examples/custom_tui/`)
+
+```tsx
+import { mount, BridgeProvider, useBridgeSend, useBridgeEvents,
+         Markdown } from "@miniadk/tui";
+
+function App() {
+  const send = useBridgeSend();
+  const [items, setItems] = useState([]);
+  useBridgeEvents("message", (e) => setItems(p => [...p, e.data.text]));
+  return /* …your layout… */;
+}
+
+mount((bridge) => <BridgeProvider bridge={bridge}><App/></BridgeProvider>);
+```
+
+Point Python at your binary via `MINIADK_TUI_BIN` and `run_cli` does
+the rest.
 
 ## Models
 
-`model()` reads provider settings from environment variables and returns a
-configured adapter.
-
-OpenAI-compatible settings:
+`model()` reads provider settings from environment variables and
+returns a configured adapter:
 
 ```txt
-OPENAI_KEY=...
-OPENAI_URL=...
+ANTHROPIC_API_KEY=...    # or ANTHROPIC_AUTH_TOKEN
+ANTHROPIC_BASE_URL=...   # optional, for proxies / Anthropic-compatible APIs
+ANTHROPIC_MODEL=claude-opus-4-7
+```
+
+```txt
+OPENAI_API_KEY=...
 OPENAI_BASE_URL=...
-OPENAI_MODEL=...
+OPENAI_MODEL=gpt-5-pro
 ```
 
-Anthropic settings:
-
-```txt
-ANTHROPIC_KEY=...
-ANTHROPIC_URL=...
-ANTHROPIC_BASE_URL=...
-ANTHROPIC_MODEL=...
-```
-
-When more than one provider is configured, choose the default explicitly:
-
-```txt
-MINIADK_MODEL_PROVIDER=openai
-```
-
-or:
-
-```txt
-MINIADK_MODEL_PROVIDER=anthropic
-```
+When both are set, choose with `MINIADK_MODEL_PROVIDER=anthropic` (or
+`openai`).
 
 ## Tools
 
-Any typed Python function can become a tool:
+Any typed Python function with a docstring becomes a tool:
 
 ```py
-from pathlib import Path
-
 from miniadk import tool
 
-
 @tool
-def read_note(path: str) -> str:
-    """Read a UTF-8 note."""
-    return Path(path).read_text(encoding="utf-8")
+def now_utc() -> str:
+    "Return the current UTC time, ISO-8601."
+    from datetime import datetime, UTC
+    return datetime.now(UTC).isoformat(timespec="seconds")
 ```
 
-MiniADK uses the function name, docstring, and type hints to build the tool
-schema. Sync and async functions are both supported.
+Sync and async are both fine. The decorator reads the function name,
+docstring, and type hints to build the JSON schema.
 
-## Prebuilt Tools
-
-Reusable tools are available from `miniadk.stdtools`:
+For batteries-included tools, `make_tools` returns a curated set:
 
 ```py
-from pathlib import Path
+from miniadk import make_tools
 
-from miniadk import Agent, model, run_cli
-from miniadk.stdtools import make_list_files, make_read_file, make_search_text
-
-root = Path.cwd()
-agent = Agent(
-    "repo",
-    "Help inspect this repository.",
-    tools=[
-        make_list_files(root=root),
-        make_read_file(root=root),
-        make_search_text(root=root),
-    ],
+tools = make_tools(
+    files=True,    # read_file, list_files, glob_files, search_text
+    shell=False,   # subprocess.run wrapper
+    write=False,   # mutating file ops
+    web=True,      # fetch_url
 )
-
-run_cli(agent, model=model())
 ```
 
-File and shell tools keep path checks, permission prompts, limits, and timeouts
-outside the atomic runtime.
+Each tool keeps its own path checks, permission prompts, and limits —
+the runtime stays atomic.
 
-## Skills And MCP
+## Composition
 
-Skills and MCP servers are business-layer integrations. They resolve into
-ordinary instructions and tools before the runtime loop runs.
+`Agent` carries its own `policy` and `middleware`. Adapters never
+learn about preset shapes; they call `resolve_composition(agent)`
+once.
 
 ```py
-from miniadk import Agent, MCPHub, MCPServer, SkillRegistry, model, run_cli
+from miniadk import Agent, RunDecision
 
-agent = Agent(
+class StopAfterThreeTools:
+    def __init__(self): self.rounds = 0
+    async def after_model(self, state):
+        r = state.result
+        if r and r.message and not r.tool_calls:
+            return RunDecision.stop(r.message)
+        return RunDecision()
+    async def after_tools(self, state):
+        self.rounds += 1
+        return RunDecision.stop("hit cap") if self.rounds >= 3 else RunDecision()
+
+agent = Agent("bounded", "Answer briefly.", policy=StopAfterThreeTools())
+```
+
+Same pattern for middleware (`before_tool_call` to gate, `after_tool_call`
+to log). See `examples/05_middleware.py` and
+`examples/08_custom_policy.py`.
+
+## Skills and MCP
+
+Skills are slash-launchable playbooks (prompt + allowed tools). MCP
+servers are external tool providers connected over stdio. Both
+resolve to plain `Tool`s before the runtime loop runs.
+
+```py
+from miniadk import Agent, MCPServer, run_cli, skill
+from miniadk.mcp import MCPHub
+from miniadk.skills import SkillRegistry
+
+run_cli(Agent(
     "assistant",
-    "Use the configured project capabilities.",
-    skills=SkillRegistry.from_paths(".miniadk/skills"),
-    mcp=MCPHub([
-        MCPServer(name="docs", command="uvx", args=["some-mcp-server"]),
-    ]),
-)
-
-run_cli(agent, model=model())
+    "Use available capabilities.",
+    skills=SkillRegistry.from_skills(
+        skill("review", "Read $path and summarise.", tools=["read_file"], args=["path"]),
+    ),
+    mcp=MCPHub([MCPServer(name="docs", command="uvx", args=["some-mcp-server"])]),
+))
 ```
-
-CLI rendering is replaceable for products that want their own terminal style:
-
-```py
-from miniadk import CLIRenderer, run_cli
-
-run_cli(agent, renderer=CLIRenderer(print, mode="pretty"))
-```
-
-In an interactive terminal, the default Python CLI uses history, slash-command
-completion, multiline editing, and streaming event rendering. Products can keep
-that default or replace the renderer/input layer when they need a custom
-terminal experience.
-
-## Core Shape
-
-The runtime loop is intentionally direct:
-
-```txt
-user message
-  -> model call
-  -> optional tool calls
-  -> tool results
-  -> model response
-  -> events
-```
-
-The core concepts are:
-
-```txt
-Message  - what the agent sees
-Model    - how the agent asks an LLM what to do next
-Tool     - what the agent can do
-Agent    - instructions plus capabilities
-Runtime  - the loop that connects everything
-Event    - what adapters and UIs observe
-Session  - persisted conversation state
-```
-
-## Package Layout
-
-```txt
-src/miniadk/core/       atomic runtime types and loop
-src/miniadk/models/     provider adapters
-src/miniadk/stdtools/   reusable file, shell, web, and agent tools
-src/miniadk/adapters/   CLI, JSON, web, and WebSocket adapters
-src/miniadk/skills.py   skill loading and invocation helpers
-src/miniadk/mcp.py      MCP integration
-src/miniadk/presets.py  optional high-level assembly helpers
-```
-
-Import the common user-facing API from `miniadk`. Use submodules when you need
-advanced control.
 
 ## Examples
 
+A teaching ladder, plus practical tools — see
+[`examples/README.md`](examples/README.md) for the index. Highlights:
+
+- `01–05` — Agent, tools, streaming, sessions, middleware (concepts).
+- `06–07` — Default CLI; a read-only repo assistant.
+- `08` — Write your own `RunPolicy` (this is how you'd build ReAct or
+  Plan-and-Execute, instead of importing a preset).
+- `09–10` — MCP client; slash-skill router.
+- `custom_tui/` — Replace the entire terminal UI with your own React
+  components while reusing the bridge.
+
 ```bash
-uv run --extra dev python examples/smoke_llm.py
-uv run --extra dev python examples/scripted_tiny_product.py
-uv run --extra dev python examples/coder_preset.py
-uv run --extra dev python examples/compact_coder.py
-uv run --extra dev python examples/repo_cli.py
-uv run --extra dev python examples/cli_interaction_lab.py
+uv run python examples/01_hello_agent.py
+uv run python examples/06_run_cli.py
 ```
 
-## Development
+## Architecture
 
-```bash
-uv sync --extra dev
-uv run --extra dev pytest -q
-uv build
+Two-layer separation:
+
 ```
+adapters/      tui_ink   tui_textual   json   web   ws    (lazy, opt-in)
+core/          Agent  Tool  Model  Runtime  Session  Event  RunPolicy
+```
+
+`import miniadk` loads only the core — no Textual, no Ink, no React.
+TUI deps are resolved on attribute access. See
+[`docs/architecture.md`](docs/architecture.md) for layering and
+extension points, and [`docs/tui-protocol.md`](docs/tui-protocol.md)
+for the JSON wire format between Python and the Ink subprocess.
+
+## What MiniADK does *not* provide
+
+By design — these belong to your application, not the framework:
+
+- No agent-loop preset zoo (ReAct, Plan-and-Execute, Tree-of-Thought,
+  reflection). Compose them out of `RunPolicy` + middleware.
+- No prompt template library. Strings work fine.
+- No retrieval / vector store integration. Wrap one in a `Tool` if
+  you need it.
+
+The `agentic()` preset is the **one** opinionated composition we
+ship. Treat it as an example you can read and copy, not as the
+canonical way.
 
 ## License
 

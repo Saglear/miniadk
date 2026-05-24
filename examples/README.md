@@ -1,90 +1,49 @@
 # MiniADK Examples
 
-These are small agent products built with MiniADK.
+A short tour. Each file is self-contained and meant to be read in
+order — concepts stack from the simplest to the most useful.
 
-They are intentionally outside the core package. MiniADK is the ADK; examples
-are products built on top of it.
+| # | File | Teaches |
+|---|------|---------|
+| 01 | [`01_hello_agent.py`](01_hello_agent.py) | The smallest possible agent: instructions, `run`, done. |
+| 02 | [`02_with_a_tool.py`](02_with_a_tool.py) | `@tool` — a Python function the model can call. |
+| 03 | [`03_streaming.py`](03_streaming.py) | Iterate over `Runtime.run()` events: tokens, tool calls, results. |
+| 04 | [`04_session_and_compaction.py`](04_session_and_compaction.py) | Persist a conversation across runs with `session=`. |
+| 05 | [`05_middleware.py`](05_middleware.py) | Audit and gate tool calls via `before_tool_call`. |
+| 06 | [`06_run_cli.py`](06_run_cli.py) | The default terminal UI in 15 lines. |
+| 07 | [`07_repo_assistant.py`](07_repo_assistant.py) | A read-only repo helper using `make_tools(...)`. |
+| 08 | [`08_custom_policy.py`](08_custom_policy.py) | A custom `RunPolicy` — bound the loop, write your own ReAct. |
+| 09 | [`09_mcp_client.py`](09_mcp_client.py) | Borrow tools from an external MCP server over stdio. |
+| 10 | [`10_skills_router.py`](10_skills_router.py) | Register slash-commands the user can launch from the CLI. |
+| — | [`custom_tui/`](custom_tui/) | Replace the entire React/Ink UI in ~80 lines while reusing the bridge. |
 
-## Environment
+## Running them
 
-Examples that use `model()` read `.env` from this directory or any parent
-directory automatically. Examples that instantiate provider adapters directly
-load `.env` explicitly before construction.
-
-Supported variables:
-
-```txt
-OPENAI_KEY=...
-OPENAI_URL=...
-OPENAI_BASE_URL=...
-OPENAI_MODEL=...
-
-ANTHROPIC_KEY=...
-ANTHROPIC_URL=...
-ANTHROPIC_BASE_URL=...
-ANTHROPIC_MODEL=...
-```
-
-Examples that call `model()` pick Anthropic when Anthropic keys are present,
-otherwise they use the OpenAI-compatible adapter. `smoke_llm.py` uses that
-single default path, so only one provider needs to be configured for the smoke
-test.
-
-## Run
-
-From the `miniadk` directory:
+Most files just need an LLM key in your environment (or a nearby `.env`):
 
 ```bash
-uv run --extra dev python examples/openai_file_assistant.py
-uv run --extra dev python examples/anthropic_file_assistant.py
-uv run --extra dev python examples/coder_preset.py
-uv run --extra dev python examples/compact_coder.py
-uv run --extra dev python examples/repo_cli.py
-uv run --extra dev python examples/cli_interaction_lab.py
+export ANTHROPIC_API_KEY=...           # or OPENAI_API_KEY=...
+uv run python examples/01_hello_agent.py
 ```
 
-The file assistant examples are deliberately small. They show how a real
-product can assemble an agent from MiniADK pieces without changing the ADK
-itself.
+For the CLI examples (`06`, `07`, `10`), MiniADK will lazily download the
+Ink TUI binary on first run (~70 MB, cached at
+`~/.cache/miniadk/tui/`). No extra steps needed. Set
+`MINIADK_TUI_NO_FETCH=1` to skip the download and use the Textual
+fallback (`pip install miniadk[tui-textual]`).
 
-`coder_preset.py` is the shortest preset path. It packages common defaults
-while still letting users replace tools, skills, models, permissions, and
-adapters.
+## What you should walk away with
 
-`compact_coder.py` keeps a coding-agent product on one screen. It combines
-workspace tools, project skills, foreground/background reviewer agents, todos,
-and session persistence through the `coder()` preset.
+- **Tools are functions.** No registry to learn — just `@tool`.
+- **Composition lives on `Agent`.** `policy=`, `middleware=`, `tools=`
+  is enough for any workflow you'd otherwise reach for a "framework"
+  to do.
+- **Adapters are thin.** `run`, `arun`, `run_cli`, `astream_json`,
+  `ws_json` all take the same `Agent`; nothing about the runtime
+  knows about preset shapes.
+- **The Ink TUI is replaceable.** See `custom_tui/` — Python doesn't
+  change at all when you swap the React tree.
 
-`repo_cli.py` is a larger repository-assistant example. It uses:
-
-- `stdtools` for file and shell actions
-- `AgenticPolicy` and `todo_write` for continuation
-- local `SKILL.md` files
-- `/skill` style invocation in the CLI
-- the short `model()` helper for OpenAI-compatible or Anthropic adapters
-- the same atomic runtime core, with business-layer policy
-
-`cli_interaction_lab.py` is the maintained CLI interaction playground. It uses
-the real model configured in `.env` and should be updated whenever the CLI
-surface changes.
-
-## Boundary
-
-These examples are products. MiniADK itself is not the product.
-
-The package provides:
-
-- runtime
-- loop policy hooks
-- models
-- tools
-- middleware
-- event stream
-- adapters
-
-The examples choose:
-
-- instructions
-- which tools to expose
-- which model adapter to use
-- how to run the CLI
+These examples deliberately stop short of "look how powerful": the
+point of MiniADK is that you write the smarts. The presets here are
+example compositions, not the framework.

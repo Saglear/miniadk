@@ -1,4 +1,4 @@
-from .agent import Agent, as_tool
+from .agent import Agent, as_tool, resolve_composition
 from .events import Event
 from .messages import Message
 from .middleware import (
@@ -61,6 +61,7 @@ __all__ = [
     "Runtime",
     "arun",
     "run",
+    "resolve_composition",
     "Session",
     "SessionStats",
     "ScriptedModel",

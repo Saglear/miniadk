@@ -2,249 +2,219 @@
 
 [English](README.md)
 
-MiniADK 是一个小型 Python Agent Development Kit，用来用简洁、可读的 API
-构建可以调用工具的智能体。
+一个小巧的 Python Agent Development Kit。用紧凑、可读的 API 构建会用工具的
+agent。核心保持精简；providers、tools、policies、skills、MCP、CLI 适配器、
+预设都在外围，按需取用。
 
-它提供构建智能体产品所需要的基础部件：
-
-- `Agent`：指令和能力
-- `Model`：大模型适配器
-- `Tool`：Python 函数工具封装
-- `Runtime`：智能体运行循环
-- `Event`：给 CLI、Web、UI 使用的事件流
-- `Session`：会话状态
-
-MiniADK 是开发套件，不是一个已经固定好的智能体产品。核心保持小而稳定，
-模型适配器、工具、策略、skills、MCP、CLI 适配器和 preset 都围绕核心组合。
+MiniADK 是开发工具，**不是成品 agent**。我们提供积木，你写智慧。
 
 ## 安装
 
-从源码安装：
+```bash
+pip install miniadk
+```
+
+核心就这一行命令。默认终端 UI（基于 Ink，TypeScript 写的）会在第一次调用
+`run_cli` 时按需下载，缓存在 `~/.cache/miniadk/tui/`。如果不想走网络：
+
+```bash
+pip install miniadk[tui-textual]   # 纯 Python 后备 TUI
+```
+
+然后设置 `MINIADK_TUI_NO_FETCH=1`，或给 `run_cli` 传 `backend="textual"`。
+
+开发：
 
 ```bash
 git clone https://github.com/Saglear/miniadk.git
 cd miniadk
 uv sync --extra dev
-```
-
-运行测试：
-
-```bash
 uv run --extra dev pytest -q
 ```
 
-## 快速开始
+## 三段 Quickstart
+
+### 1. 无 UI agent（≤ 15 行）
 
 ```py
-from miniadk import Agent, model, run_cli, tool
-
+from miniadk import Agent, run, tool
 
 @tool
-def add(left: int, right: int) -> int:
-    """Add two numbers."""
-    return left + right
+def add(a: int, b: int) -> int:
+    "返回 a + b。"
+    return a + b
 
-
-agent = Agent(
-    "calc",
-    "Use tools when they help.",
-    tools=[add],
-)
-
-run_cli(agent, model=model())
+agent = Agent("calc", "用工具来辅助回答。", tools=[add])
+print(run(agent, "17 + 25 等于多少？"))
 ```
 
-运行：
-
-```bash
-uv run python calc.py
-```
-
-## 单次调用
+### 2. 默认终端 UI（≤ 10 行）
 
 ```py
-from miniadk import Agent, model, run, tool
+from miniadk import Agent, make_tools, run_cli
 
-
-@tool
-def greet(name: str) -> str:
-    """Return a greeting."""
-    return f"hello {name}"
-
-
-agent = Agent("hello", "Use tools when useful.", tools=[greet])
-answer = run(agent, "Greet Ada", model=model())
-print(answer)
+run_cli(Agent(
+    "repo",
+    "回答关于当前仓库的问题。",
+    tools=make_tools(write=False, shell=False),
+))
 ```
+
+### 3. 自定义 React/Ink UI（~30 行，见 `examples/custom_tui/`）
+
+```tsx
+import { mount, BridgeProvider, useBridgeSend, useBridgeEvents,
+         Markdown } from "@miniadk/tui";
+
+function App() {
+  const send = useBridgeSend();
+  const [items, setItems] = useState([]);
+  useBridgeEvents("message", (e) => setItems(p => [...p, e.data.text]));
+  return /* …你的布局… */;
+}
+
+mount((bridge) => <BridgeProvider bridge={bridge}><App/></BridgeProvider>);
+```
+
+通过 `MINIADK_TUI_BIN` 让 Python 找到你的二进制，`run_cli` 负责其余部分。
 
 ## 模型
 
-`model()` 会从环境变量读取配置，并返回可用的模型适配器。
-
-OpenAI 兼容接口：
+`model()` 从环境变量读取配置：
 
 ```txt
-OPENAI_KEY=...
-OPENAI_URL=...
+ANTHROPIC_API_KEY=...     # 或 ANTHROPIC_AUTH_TOKEN
+ANTHROPIC_BASE_URL=...    # 可选，用于代理 / Anthropic 兼容服务
+ANTHROPIC_MODEL=claude-opus-4-7
+```
+
+```txt
+OPENAI_API_KEY=...
 OPENAI_BASE_URL=...
-OPENAI_MODEL=...
+OPENAI_MODEL=gpt-5-pro
 ```
 
-Anthropic 接口：
-
-```txt
-ANTHROPIC_KEY=...
-ANTHROPIC_URL=...
-ANTHROPIC_BASE_URL=...
-ANTHROPIC_MODEL=...
-```
-
-如果同时配置了多个提供方，可以明确指定默认值：
-
-```txt
-MINIADK_MODEL_PROVIDER=openai
-```
-
-或：
-
-```txt
-MINIADK_MODEL_PROVIDER=anthropic
-```
+两者都设置时用 `MINIADK_MODEL_PROVIDER=anthropic`（或 `openai`）显式指定。
 
 ## 工具
 
-带类型标注的 Python 函数可以直接变成工具：
+任何带类型注解 + docstring 的 Python 函数都能成为工具：
 
 ```py
-from pathlib import Path
-
 from miniadk import tool
 
-
 @tool
-def read_note(path: str) -> str:
-    """Read a UTF-8 note."""
-    return Path(path).read_text(encoding="utf-8")
+def now_utc() -> str:
+    "返回当前 UTC 时间，ISO-8601 格式。"
+    from datetime import datetime, UTC
+    return datetime.now(UTC).isoformat(timespec="seconds")
 ```
 
-MiniADK 会用函数名、docstring 和类型标注生成工具 schema。同步函数和异步函数
-都支持。
+同步、异步皆可。装饰器读函数名、docstring、类型注解生成 JSON Schema。
 
-## 内置工具
-
-`miniadk.stdtools` 提供可复用工具：
+`make_tools` 返回一组开箱即用的工具：
 
 ```py
-from pathlib import Path
+from miniadk import make_tools
 
-from miniadk import Agent, model, run_cli
-from miniadk.stdtools import make_list_files, make_read_file, make_search_text
-
-root = Path.cwd()
-agent = Agent(
-    "repo",
-    "Help inspect this repository.",
-    tools=[
-        make_list_files(root=root),
-        make_read_file(root=root),
-        make_search_text(root=root),
-    ],
+tools = make_tools(
+    files=True,    # read_file, list_files, glob_files, search_text
+    shell=False,   # subprocess.run 包装
+    write=False,   # 修改类文件操作
+    web=True,      # fetch_url
 )
-
-run_cli(agent, model=model())
 ```
 
-文件和 shell 工具的路径检查、权限提示、输出限制和超时控制都放在运行核心之外。
+每个工具自行管理路径检查、权限提示、限制——runtime 保持纯净。
 
-## Skills 和 MCP
+## 组合
 
-Skills 和 MCP 是业务层集成。它们会在运行循环开始前解析成普通指令和普通工具。
+`Agent` 自己带 `policy` 与 `middleware`。adapter 永远不需要学习预设的形状，
+只在入口调一次 `resolve_composition(agent)`。
 
 ```py
-from miniadk import Agent, MCPHub, MCPServer, SkillRegistry, model, run_cli
+from miniadk import Agent, RunDecision
 
-agent = Agent(
+class StopAfterThreeTools:
+    def __init__(self): self.rounds = 0
+    async def after_model(self, state):
+        r = state.result
+        if r and r.message and not r.tool_calls:
+            return RunDecision.stop(r.message)
+        return RunDecision()
+    async def after_tools(self, state):
+        self.rounds += 1
+        return RunDecision.stop("达到上限") if self.rounds >= 3 else RunDecision()
+
+agent = Agent("bounded", "简短回答。", policy=StopAfterThreeTools())
+```
+
+middleware 同理（`before_tool_call` 拦截，`after_tool_call` 记录）。
+参考 `examples/05_middleware.py` 与 `examples/08_custom_policy.py`。
+
+## Skills 与 MCP
+
+Skills 是用户用 `/name` 触发的指令书（prompt + 允许的工具）。
+MCP 服务器是外部工具源，通过 stdio 连接。两者都在进入 runtime loop 之前
+解析为普通 `Tool`。
+
+```py
+from miniadk import Agent, MCPServer, run_cli, skill
+from miniadk.mcp import MCPHub
+from miniadk.skills import SkillRegistry
+
+run_cli(Agent(
     "assistant",
-    "Use the configured project capabilities.",
-    skills=SkillRegistry.from_paths(".miniadk/skills"),
-    mcp=MCPHub([
-        MCPServer(name="docs", command="uvx", args=["some-mcp-server"]),
-    ]),
-)
-
-run_cli(agent, model=model())
+    "使用现有能力回答。",
+    skills=SkillRegistry.from_skills(
+        skill("review", "读取 $path 并总结。", tools=["read_file"], args=["path"]),
+    ),
+    mcp=MCPHub([MCPServer(name="docs", command="uvx", args=["some-mcp-server"])]),
+))
 ```
 
-如果产品需要自己的终端风格，可以替换 CLI renderer：
+## Examples
 
-```py
-from miniadk import CLIRenderer, run_cli
+教学梯度 + 实用模板，索引见 [`examples/README.md`](examples/README.md)。要点：
 
-run_cli(agent, renderer=CLIRenderer(print, mode="pretty"))
-```
-
-在真实交互终端中，默认 Python CLI 支持历史记录、slash 命令补全、多行输入和
-流式事件渲染。产品可以直接使用默认体验，也可以替换 renderer/input 层来构建
-自己的终端界面。
-
-## 核心结构
-
-运行循环保持直接：
-
-```txt
-用户消息
-  -> 模型调用
-  -> 可选工具调用
-  -> 工具结果
-  -> 模型回复
-  -> 事件
-```
-
-核心概念是：
-
-```txt
-Message  - 智能体看到的内容
-Model    - 智能体如何请求大模型
-Tool     - 智能体可以做什么
-Agent    - 指令和能力
-Runtime  - 连接所有部件的循环
-Event    - 适配器和 UI 观察到的事件
-Session  - 持久化会话状态
-```
-
-## 包结构
-
-```txt
-src/miniadk/core/       原子运行时类型和循环
-src/miniadk/models/     模型提供方适配器
-src/miniadk/stdtools/   文件、shell、web、agent 等可复用工具
-src/miniadk/adapters/   CLI、JSON、Web、WebSocket 适配器
-src/miniadk/skills.py   skill 加载和调用辅助
-src/miniadk/mcp.py      MCP 集成
-src/miniadk/presets.py  可选的高层组装辅助
-```
-
-常用 API 从 `miniadk` 导入。需要更细控制时再使用子模块。
-
-## 示例
+- `01–05` — Agent、工具、流式、会话、middleware（概念）。
+- `06–07` — 默认 CLI；只读仓库助手。
+- `08` — 写你自己的 `RunPolicy`（这就是怎么"实现 ReAct"的，而不是 import
+  一个预设）。
+- `09–10` — MCP 客户端；slash-skill 路由。
+- `custom_tui/` — 用你自己的 React 组件完整替换 TUI，复用 bridge。
 
 ```bash
-uv run --extra dev python examples/smoke_llm.py
-uv run --extra dev python examples/scripted_tiny_product.py
-uv run --extra dev python examples/coder_preset.py
-uv run --extra dev python examples/compact_coder.py
-uv run --extra dev python examples/repo_cli.py
-uv run --extra dev python examples/cli_interaction_lab.py
+uv run python examples/01_hello_agent.py
+uv run python examples/06_run_cli.py
 ```
 
-## 开发
+## 架构
 
-```bash
-uv sync --extra dev
-uv run --extra dev pytest -q
-uv build
+两层分层：
+
+```
+adapters/      tui_ink   tui_textual   json   web   ws    (按需加载)
+core/          Agent  Tool  Model  Runtime  Session  Event  RunPolicy
 ```
 
-## 许可证
+`import miniadk` 只加载核心——不会拉起 Textual、Ink、React。
+TUI 依赖在属性访问时才解析。详见
+[`docs/architecture.md`](docs/architecture.md)（分层与扩展点）与
+[`docs/tui-protocol.md`](docs/tui-protocol.md)（Python ↔ Ink 子进程的 JSON
+协议）。
+
+## MiniADK 不提供什么
+
+按设计——这些应该由应用层提供，而不是框架：
+
+- 不提供 agent loop 预设动物园（ReAct、Plan-and-Execute、Tree-of-Thought、
+  reflection）。用 `RunPolicy` + middleware 自己组合。
+- 不提供 prompt 模板库。字符串就够用。
+- 不提供 retrieval / 向量库集成。需要时把它包成一个 `Tool`。
+
+`agentic()` 是我们唯一带主张的预设，把它当成可读可抄的示例，不是规范。
+
+## License
 
 MIT

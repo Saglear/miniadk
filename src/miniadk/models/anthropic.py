@@ -50,7 +50,7 @@ class AnthropicModel:
         )
         self.http_client = http_client or JsonHttpClient(
             timeout_seconds=_transport_float(
-                timeout, 60, "ANTHROPIC_TIMEOUT", "MINIADK_MODEL_TIMEOUT"
+                timeout, 600, "ANTHROPIC_TIMEOUT", "MINIADK_MODEL_TIMEOUT"
             ),
             retries=_transport_int(
                 retries, 0, "ANTHROPIC_RETRIES", "MINIADK_MODEL_RETRIES"
@@ -63,7 +63,7 @@ class AnthropicModel:
             _int_env("ANTHROPIC_MAX_TOKENS", "MINIADK_MODEL_MAX_TOKENS")
             if max_tokens is None
             else max_tokens
-        ) or 1024
+        ) or _default_max_tokens(self.model)
         self.temperature = (
             _float_env("ANTHROPIC_TEMPERATURE", "MINIADK_MODEL_TEMPERATURE")
             if temperature is None
@@ -296,12 +296,16 @@ class AnthropicModel:
             block = dict(content_blocks[index])
             partial_json = block.pop("_partial_json", None)
             if block.get("type") == "tool_use":
-                try:
-                    block["input"] = json.loads(partial_json or "{}")
-                except json.JSONDecodeError as error:
-                    raise RuntimeError("Anthropic streamed tool_use input is not valid JSON") from error
-                if not isinstance(block["input"], dict):
+                source = partial_json if partial_json else "{}"
+                parsed, repair_note = _parse_tool_input(source)
+                if not isinstance(parsed, dict):
                     raise RuntimeError("Anthropic streamed tool_use input must be an object")
+                block["input"] = parsed
+                if repair_note:
+                    # Stash on the block so the runtime / TUI can surface
+                    # a friendly "tool input was truncated" notice rather
+                    # than mistaking a partial result for a real one.
+                    block["_partial_json_repair"] = repair_note
             blocks.append(block)
         return blocks
 
@@ -365,3 +369,164 @@ def _transport_int(explicit: int | None, default: int, *env: str) -> int:
         return explicit
     value = _int_env(*env)
     return default if value is None else value
+
+
+# Per-model default ``max_tokens`` — the **response** ceiling, distinct
+# from the model's context window. Curated for 2026-05 (current model
+# generation only — older families are dropped because they're not in
+# active use). Values reflect each provider's published output ceiling
+# at the time of writing; if a number is wrong, override via the
+# ``ANTHROPIC_MAX_TOKENS`` env var or the ``max_tokens`` constructor arg.
+#
+# Keys are matched as case-insensitive substrings, so dated aliases like
+# ``claude-opus-4-7-20260416`` pick up the right entry without us
+# enumerating every variant.
+_MAX_TOKENS_TABLE: tuple[tuple[str, int], ...] = (
+    # ── Anthropic Claude 4.x ─────────────────────────────────────────
+    ("claude-opus-4", 64_000),
+    ("claude-sonnet-4", 64_000),
+    ("claude-haiku-4", 16_384),
+    # ── OpenAI GPT-5.x (used over Anthropic-compat proxies) ──────────
+    ("gpt-5-pro", 128_000),
+    ("gpt-5-codex", 128_000),
+    ("gpt-5.5", 128_000),
+    ("gpt-5.4", 128_000),
+    ("gpt-5.3", 128_000),
+    ("gpt-5.1", 128_000),
+    ("gpt-5", 128_000),
+    # ── DeepSeek V4 ──────────────────────────────────────────────────
+    ("deepseek-v4-pro", 65_536),
+    ("deepseek-v4-flash", 32_768),
+    ("deepseek-v4", 32_768),
+    # ── MiniMax 2.x ──────────────────────────────────────────────────
+    ("minimax-2.7", 65_536),
+    ("minimax-2.5", 65_536),
+    ("minimax2.7", 65_536),
+    ("minimax2.5", 65_536),
+    # ── Zhipu GLM 5.x ────────────────────────────────────────────────
+    ("glm-5.1", 32_768),
+    ("glm-5", 32_768),
+    # ── Moonshot Kimi K2.x ───────────────────────────────────────────
+    ("kimi-2.6", 65_536),
+    ("kimi-2.5", 65_536),
+    ("kimi2.6", 65_536),
+    ("kimi2.5", 65_536),
+    # ── Alibaba Qwen 3.x (still widely deployed in 2026) ─────────────
+    ("qwen3-coder", 65_536),
+    ("qwen3", 65_536),
+)
+
+# Fallback when the model name doesn't match any known family. Picked
+# at 32k — covers a typical "modern frontier model" output cap without
+# being so high that smaller endpoints reject the request. Users on
+# something with a higher cap can override via env or constructor arg.
+_DEFAULT_MAX_TOKENS_FALLBACK = 32_768
+
+
+def _default_max_tokens(model: str | None) -> int:
+    if not model:
+        return _DEFAULT_MAX_TOKENS_FALLBACK
+    needle = model.lower()
+    for prefix, value in _MAX_TOKENS_TABLE:
+        if prefix in needle:
+            return value
+    return _DEFAULT_MAX_TOKENS_FALLBACK
+
+
+def _parse_tool_input(source: str) -> tuple[Any, str | None]:
+    """Parse a streamed tool_use input JSON.
+
+    Anthropic's streaming protocol assembles a tool's ``input`` from
+    ``input_json_delta`` events. Some upstreams (proxies, max_tokens
+    truncation) deliver an incomplete JSON document. Rather than
+    failing the entire turn we attempt to repair the payload by
+    closing dangling strings / objects / arrays so the model can at
+    least see *what it tried to call* and recover on the next turn.
+
+    Returns a ``(parsed, repair_note)`` tuple. ``repair_note`` is
+    ``None`` when the payload parsed cleanly; otherwise it describes
+    the repair so callers can flag the call as suspect.
+    """
+
+    try:
+        return json.loads(source), None
+    except json.JSONDecodeError as error:
+        first_error = error
+
+    repaired = _repair_truncated_json(source)
+    if repaired is not None:
+        try:
+            return json.loads(repaired), f"truncated input was auto-repaired (orig len={len(source)})"
+        except json.JSONDecodeError:
+            pass
+
+    preview = source if len(source) <= 200 else f"{source[:100]}…{source[-100:]}"
+    note = (
+        f"tool input was not valid JSON and could not be repaired "
+        f"(len={len(source)}, error={first_error.msg} at pos {first_error.pos}): {preview!r}"
+    )
+    return {"_miniadk_invalid_input": source}, note
+
+
+def _repair_truncated_json(source: str) -> str | None:
+    """Best-effort close of an unterminated JSON document.
+
+    Walks the string tracking quote / brace / bracket state and
+    appends whatever closers are missing. Handles backslash escapes
+    inside strings. Conservative — bails on anything weirder than a
+    single trailing-cut document.
+    """
+
+    if not source:
+        return None
+    stack: list[str] = []
+    in_string = False
+    escape = False
+    last_value_terminator = -1
+    expecting_value = False
+    for i, char in enumerate(source):
+        if escape:
+            escape = False
+            continue
+        if char == "\\" and in_string:
+            escape = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if char in "{[":
+            stack.append("}" if char == "{" else "]")
+            expecting_value = char == "{"
+            continue
+        if char in "}]":
+            if not stack:
+                return None
+            stack.pop()
+            expecting_value = False
+            continue
+        if char == ":":
+            expecting_value = True
+        elif char == ",":
+            expecting_value = True
+        elif not char.isspace():
+            expecting_value = False
+
+    closers = list(stack)
+    if not in_string and not closers:
+        return None  # well-formed already, no repair needed
+
+    suffix = ""
+    if in_string:
+        # We just closed a string — that's a value. Don't add `null`
+        # afterwards.
+        suffix += '"'
+        expecting_value = False
+    # If we cut after a `:` or `,` with no value yet, the still-open
+    # object/array needs a value. Insert null so the JSON is valid.
+    if expecting_value and closers and closers[-1] in {"}", "]"}:
+        suffix += "null"
+    while closers:
+        suffix += closers.pop()
+    return source + suffix

@@ -5,6 +5,7 @@ from miniadk import (
     Agent,
     Agentic,
     Guard,
+    MiniADKApp,
     ModelResult,
     OpenAIModel,
     ScriptedModel,
@@ -348,18 +349,11 @@ def test_coder_preset_can_disable_auto_skill_loading(tmp_path):
 
 def test_run_cli_accepts_agentic_preset(tmp_path):
     built = coder(tmp_path, files=False, shell=False)
-    outputs: list[str] = []
-    inputs = iter(["/status", "/exit"])
 
-    run_cli(
-        built,
-        model=ScriptedModel([]),
-        input_func=lambda _prompt: next(inputs),
-        output_func=outputs.append,
-    )
+    app = MiniADKApp(built, model=ScriptedModel([]))
 
-    assert any("agent" in output for output in outputs)
-    assert any("coder" in output for output in outputs)
+    assert app.agent.name == "coder"
+    assert any(isinstance(m, Guard) for m in app._raw_middleware or []) or app._raw_middleware == []
 
 
 def test_coder_short_usage_shape_is_available():

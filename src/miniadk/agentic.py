@@ -159,7 +159,22 @@ def agentic(
     middleware: list[Middleware] | None = None,
     max_stop_retries: int = 3,
     chat: bool = False,
-) -> Agentic:
+) -> "Agentic":
+    """Compose ``agent`` with the standard agentic loop policy.
+
+    Returns an :class:`Agentic` struct whose ``.agent`` is a regular
+    :class:`miniadk.Agent` already carrying ``policy=AgenticPolicy(...)``
+    and ``middleware=[...]``. Because the policy/middleware live on the
+    Agent itself, every adapter (run, run_cli, astream_json, ws_json…)
+    picks them up through :func:`resolve_composition` with no special
+    case for this preset.
+
+    The struct is the convenience handle — ``kit.todos`` lets the
+    caller poke at the shared todo store; ``kit.policy`` is just the
+    policy instance for explicit access. The struct is intentionally
+    not a :class:`miniadk.Agent` subclass: presets stay thin, and
+    adapters must not learn about preset-specific shapes.
+    """
     todo_store = todos or TodoStore()
     todo_tool = make_todo_tool(todo_store)
     todo_read = make_todo_read(todo_store)
@@ -171,19 +186,23 @@ def agentic(
     instructions = with_agentic_instructions(agent.instructions)
     if chat:
         instructions = with_chat_instructions(instructions)
+    policy = AgenticPolicy(
+        todo_store=todo_store,
+        max_stop_retries=max_stop_retries,
+        chat=chat,
+    )
+    composed_agent = Agent(
+        name=agent.name,
+        instructions=instructions,
+        tools=[*tools, todo_read, todo_tool],
+        skills=agent.skills,
+        mcp=agent.mcp,
+        policy=policy,
+        middleware=list(middleware) if middleware else None,
+    )
     return Agentic(
-        agent=Agent(
-            name=agent.name,
-            instructions=instructions,
-            tools=[*tools, todo_read, todo_tool],
-            skills=agent.skills,
-            mcp=agent.mcp,
-        ),
-        policy=AgenticPolicy(
-            todo_store=todo_store,
-            max_stop_retries=max_stop_retries,
-            chat=chat,
-        ),
+        agent=composed_agent,
+        policy=policy,
         todos=todo_store,
         middleware=list(middleware or []),
     )

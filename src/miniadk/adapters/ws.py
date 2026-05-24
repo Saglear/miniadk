@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ..core.agent import Agent
+from ..core.agent import Agent, resolve_composition
 from ..core.middleware import AskUser, Middleware
 from ..core.model import Model
 from ..core.policy import RunPolicy
@@ -30,15 +30,17 @@ async def ws_json(
     policy: RunPolicy | None = None,
     session: Session | str | Path | bool | None = None,
     tools: list[Tool] | None = None,
-    max_steps: int = 20,
+    max_steps: int | None = None,
     lifecycle: bool = False,
     trace: bool = False,
     resolve: bool = True,
     compact: CompactSpec = None,
     ask_user: AskUser | None = None,
 ) -> int:
-    middleware = _unwrap_middleware(agent, middleware)
-    agent, policy = _unwrap_agent(agent, policy)
+    middleware = list(middleware) if middleware else None
+    agent, middleware, policy = resolve_composition(
+        agent, middleware=middleware, policy=policy,
+    )
     runtime_middleware = bind_guards(middleware, ask_user=ask_user)
     active_agent = await resolve_agent(agent) if resolve else agent
     active_session, session_path = _load_session(session, active_agent)
@@ -73,21 +75,6 @@ async def ws_json(
     finally:
         _save_session(runtime.session, session_path)
     return count
-
-
-def _unwrap_agent(agent, policy: RunPolicy | None) -> tuple[Agent, RunPolicy | None]:
-    wrapped_agent = getattr(agent, "agent", None)
-    wrapped_policy = getattr(agent, "policy", None)
-    if isinstance(wrapped_agent, Agent):
-        return wrapped_agent, policy or wrapped_policy
-    return agent, policy
-
-
-def _unwrap_middleware(agent, middleware: list[Middleware] | None) -> list[Middleware] | None:
-    wrapped_middleware = getattr(agent, "middleware", None)
-    if not wrapped_middleware:
-        return middleware
-    return [*wrapped_middleware, *(middleware or [])]
 
 
 async def _send(ws: Any, event: dict[str, Any]) -> None:

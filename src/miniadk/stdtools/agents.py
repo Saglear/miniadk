@@ -61,7 +61,7 @@ class Spawn:
     middlewares: dict[str, list[Middleware]] = field(default_factory=dict)
     middleware: list[Middleware] = field(default_factory=list)
     ask_user: AskUser | None = None
-    max_steps: int = 20
+    max_steps: int | None = None
     keep_session: bool = False
 
     def __call__(
@@ -138,7 +138,7 @@ def make_spawn(
     middlewares: dict[str, list[Middleware]] | None = None,
     middleware: list[Middleware] | None = None,
     ask_user: AskUser | None = None,
-    max_steps: int = 20,
+    max_steps: int | None = None,
     keep_session: bool = False,
     name: str = "spawn_agent",
     description: str | None = None,
@@ -169,7 +169,7 @@ class Work:
     middlewares: dict[str, list[Middleware]] = field(default_factory=dict)
     middleware: list[Middleware] = field(default_factory=list)
     ask_user: AskUser | None = None
-    max_steps: int = 20
+    max_steps: int | None = None
     keep_session: bool = False
     _items: dict[str, _WorkItem] = field(default_factory=dict, init=False, repr=False)
 
@@ -382,7 +382,7 @@ def make_work(
     middlewares: dict[str, list[Middleware]] | None = None,
     middleware: list[Middleware] | None = None,
     ask_user: AskUser | None = None,
-    max_steps: int = 20,
+    max_steps: int | None = None,
     keep_session: bool = False,
 ) -> list[Tool]:
     return Work(

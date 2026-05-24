@@ -4,16 +4,43 @@ build-backend = "hatchling.build"
 
 [project]
 name = "miniadk"
-version = "0.1.0"
+version = "0.2.0"
 description = "A tiny Python agent runtime with tools, middleware, and events."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Saglear" }]
-dependencies = ["prompt-toolkit>=3.0"]
+keywords = ["agent", "llm", "tools", "anthropic", "openai", "tui", "cli"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+]
+# Core ADK has no runtime dependencies — Agent / Runtime / Tools work
+# off the standard library alone. TUI backends are opt-in extras so a
+# headless install (web, MCP, CI) stays small.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/Saglear/miniadk"
+Repository = "https://github.com/Saglear/miniadk"
+Issues = "https://github.com/Saglear/miniadk/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+# Default Ink TUI: pure Python side has no extra deps; users pick up
+# the Bun-compiled binary via the post-install fetch script.
+tui = []
+# Legacy full-screen Textual TUI. Kept as an opt-in fallback for users
+# who can't run the Ink binary on their platform.
+tui-textual = ["textual>=0.85"]
+
+[project.scripts]
+miniadk-tui-fetch = "miniadk._tui_fetch:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

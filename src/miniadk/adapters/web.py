@@ -229,7 +229,7 @@ async def ws_chat(
     policy: RunPolicy | None = None,
     session: Session | str | Path | bool | None = None,
     tools: list[Tool] | None = None,
-    max_steps: int = 20,
+    max_steps: int | None = None,
     lifecycle: bool = False,
     trace: bool = False,
     resolve: bool = True,

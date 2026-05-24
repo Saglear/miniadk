@@ -1,0 +1,9 @@
+{
+  "name": "miniadk-monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "workspaces": [
+    "tui-ts",
+    "examples/custom_tui"
+  ]
+}

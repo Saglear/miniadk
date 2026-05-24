@@ -30,7 +30,9 @@ class FetchResult:
 
 def make_fetch_url(
     *,
-    timeout: float = 10,
+    # 2 minutes — slow news / data sites can take 30s+ to render and
+    # respond. Per-call override is preferred for stricter cases.
+    timeout: float = 120,
     max_bytes: int | None = 200_000,
     allow: Callable[[str], bool | str | None] | None = None,
     user_agent: str = "MiniADK/0",

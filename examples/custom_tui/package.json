@@ -1,0 +1,17 @@
+{
+  "name": "miniadk-custom-tui-example",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@miniadk/tui": "workspace:*",
+    "ink": "^5.0.1",
+    "ink-text-input": "^6.0.0",
+    "react": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.6.3"
+  }
+}

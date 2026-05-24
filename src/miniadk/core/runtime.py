@@ -28,10 +28,21 @@ class Runtime:
         middleware: list[Middleware] | None = None,
         policy: RunPolicy | None = None,
         session: Session | None = None,
-        max_steps: int = 20,
+        # ``None`` means no cap — task complexity is set by the task,
+        # not the framework. Pass an explicit int when you need a hard
+        # ceiling (CI, demos, untrusted models).
+        max_steps: int | None = None,
     ):
         self.agent = agent
         self.model = model
+        # Honour ``agent.middleware`` / ``agent.policy`` when the caller
+        # didn't override them. This lets ``Agent`` carry its own
+        # composition (presets, todo policy, custom guards) without
+        # forcing every adapter to know about wrapper types.
+        if middleware is None and getattr(agent, "middleware", None):
+            middleware = list(agent.middleware)
+        if policy is None and getattr(agent, "policy", None) is not None:
+            policy = agent.policy
         self.middleware = middleware or []
         self.policy = policy or DefaultRunPolicy()
         self.session = session if session is not None else Session()
@@ -108,7 +119,16 @@ class Runtime:
         self.messages.append(Message("user", user_input))
         active_tools = list(self.agent.tools if tools is None else tools)
 
-        for step in range(1, self.max_steps + 1):
+        # ``max_steps=None`` means "no cap" — the right default for an
+        # agent product where task complexity is decided by the task,
+        # not the framework. Iterate via itertools.count when uncapped
+        # to keep the loop shape identical.
+        if self.max_steps is None:
+            from itertools import count
+            step_iter: Any = count(1)
+        else:
+            step_iter = range(1, self.max_steps + 1)
+        for step in step_iter:
             self._current_step = step
             cancelled = self._cancel_event()
             if cancelled is not None:
@@ -892,7 +912,7 @@ async def arun(
     policy: RunPolicy | None = None,
     session: Session | None = None,
     tools: list[Tool] | None = None,
-    max_steps: int = 20,
+    max_steps: int | None = None,
 ) -> str:
     runtime = Runtime(
         agent=agent,
@@ -914,7 +934,7 @@ def run(
     policy: RunPolicy | None = None,
     session: Session | None = None,
     tools: list[Tool] | None = None,
-    max_steps: int = 20,
+    max_steps: int | None = None,
 ) -> str:
     return asyncio.run(
         arun(

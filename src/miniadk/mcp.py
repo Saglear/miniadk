@@ -44,7 +44,10 @@ class MCPServer:
     cwd: str | Path | None = None
     env: dict[str, str | None] = field(default_factory=dict)
     inherit_env: bool = True
-    timeout_seconds: float = 10
+    # 2 minutes — covers MCP server startup (some load big models or
+    # warm caches) and slow tool calls. Override on the StdioServer
+    # for stricter cases.
+    timeout_seconds: float = 120
 
     def __post_init__(self) -> None:
         if not self.name.strip():

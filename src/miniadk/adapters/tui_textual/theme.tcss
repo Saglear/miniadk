@@ -1,0 +1,138 @@
+Screen {
+    background: transparent;
+    color: auto;
+    layers: base modal;
+}
+
+#transcript {
+    height: 1fr;
+    padding: 1 2 0 2;
+    scrollbar-gutter: stable;
+    background: transparent;
+}
+
+#activity {
+    dock: bottom;
+    offset: 0 -3;
+    height: 1;
+    padding: 0 2;
+    color: $text-muted;
+    background: transparent;
+    display: none;
+}
+
+#activity.visible {
+    display: block;
+}
+
+#input-bar {
+    dock: bottom;
+    height: auto;
+    max-height: 8;
+    padding: 0 1;
+    background: transparent;
+    border-top: hkey $primary 30%;
+}
+
+#input-bar Input {
+    border: none;
+    background: transparent;
+    padding: 0 1;
+}
+
+#input-bar Input:focus {
+    border: none;
+    background: transparent;
+}
+
+#status-bar {
+    dock: bottom;
+    height: 1;
+    padding: 0 2;
+    background: transparent;
+    color: $text-muted;
+}
+
+#status-bar .status-left {
+    width: 1fr;
+    background: transparent;
+    color: $text-muted;
+}
+
+#status-bar .status-right {
+    width: auto;
+    background: transparent;
+    color: $text-muted;
+}
+
+PermissionModal {
+    align: center middle;
+    background: rgba(0, 0, 0, 0.4);
+}
+
+PermissionModal #dialog {
+    width: 64;
+    height: auto;
+    border: round $primary;
+    padding: 1 2;
+    background: $surface;
+}
+
+PermissionModal #dialog .title {
+    text-style: bold;
+    color: $primary;
+}
+
+PermissionModal #dialog .reason {
+    color: $text-muted;
+    margin-bottom: 1;
+}
+
+PermissionModal #dialog .args {
+    color: $text-muted;
+    margin-bottom: 1;
+}
+
+PermissionModal #dialog .hint {
+    color: $text-muted;
+    text-style: italic;
+}
+
+CommandPaletteModal {
+    align: center middle;
+    background: rgba(0, 0, 0, 0.4);
+}
+
+CommandPaletteModal #palette {
+    width: 70%;
+    max-width: 90;
+    height: auto;
+    max-height: 80%;
+    border: round $primary;
+    background: $surface;
+    padding: 1 2;
+}
+
+CommandPaletteModal #palette .group {
+    text-style: bold;
+    color: $primary;
+    margin-top: 1;
+}
+
+CommandPaletteModal #palette .row {
+    margin-left: 2;
+}
+
+InfoModal {
+    align: center middle;
+    background: rgba(0, 0, 0, 0.4);
+}
+
+InfoModal #info {
+    width: 70%;
+    max-width: 90;
+    max-height: 80%;
+    border: round $primary;
+    background: $surface;
+    padding: 1 2;
+}

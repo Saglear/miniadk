@@ -1,0 +1,16 @@
+# When `@miniadk/tui` is consumed as a library (via file:/link:), the
+# host project provides react and ink. We don't want them duplicated
+# inside `tui-ts/node_modules` because Node's resolution walks up from
+# the linked source dir and would pick our copy over the host's,
+# breaking React's "single instance" rule.
+#
+# The default Bun behaviour auto-installs peerDependencies. We
+# deliberately turn that off here. For local development of the
+# default TUI binary, install them manually with:
+#
+#     bun install --include react ink
+#
+# Or rely on the `dist/` builds produced via `bun run build` which
+# bundle them.
+[install]
+peer = false
